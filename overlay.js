@@ -534,6 +534,46 @@
             return m;
         }
 
+        // Per-number Heat Score 0-100: blends recent (last 20 draws) performance,
+        // overall session frequency, and recency (time since last hit), normalized
+        // across the board so the hottest number ≈ 100 and the coldest ≈ 0.
+        computeHeatScores() {
+            const N = this.numberCount;
+            const scores = new Array(N + 1).fill(0);
+            const draws = this.getRecentDraws(1000);
+            const total = draws.length;
+            if (!total) return scores;
+            const recentWin = Math.min(20, total);
+            const recent = new Array(N + 1).fill(0);
+            const overall = new Array(N + 1).fill(0);
+            const lastSeen = new Array(N + 1).fill(Infinity); // draws since last hit
+            for (let i = 0; i < total; i++) {
+                const d = draws[i];
+                for (let j = 0; j < d.length; j++) {
+                    const n = d[j];
+                    if (n >= 1 && n <= N) {
+                        overall[n]++;
+                        if (i < recentWin) recent[n]++;
+                        if (i < lastSeen[n]) lastSeen[n] = i;
+                    }
+                }
+            }
+            const raw = new Array(N + 1).fill(0);
+            let min = Infinity, max = -Infinity;
+            for (let n = 1; n <= N; n++) {
+                const recentRate = recent[n] / recentWin;
+                const overallRate = overall[n] / total;
+                const recency = lastSeen[n] === Infinity ? 0 : 1 / (1 + lastSeen[n]);
+                const r = 0.5 * recentRate + 0.3 * overallRate + 0.2 * recency;
+                raw[n] = r;
+                if (r < min) min = r;
+                if (r > max) max = r;
+            }
+            const span = (max - min) || 1;
+            for (let n = 1; n <= N; n++) scores[n] = Math.round(((raw[n] - min) / span) * 100);
+            return scores;
+        }
+
         refreshMomentumArrows() {
             if (!this.heatmapCells || !this.heatmapCells.length || !this._momentum) return;
             for (let i = 0; i < this.heatmapCells.length; i++) {
@@ -770,8 +810,13 @@
                 const gapState = (g.gap === 0) ? 'now' : (g.gapRatio >= 1.5) ? 'overdue' : (g.gapRatio >= 0.8) ? 'due' : '';
                 const gapText = (g.gap == null) ? '—' : (g.gap === 0 ? 'NOW' : g.gap);
                 const heatPct = Math.round(((g.heat || 0) / maxHeat) * 100);
+                // Group trend = net momentum of its member numbers.
+                const mom = this._momentum || [];
+                let up = 0, down = 0;
+                g.numbers.forEach(n => { if (mom[n] === 'up') up++; else if (mom[n] === 'down') down++; });
+                const gArrow = up > down ? this.momentumIcon('up') : (down > up ? this.momentumIcon('down') : '');
                 return `<div class="vx-grow" data-combo-numbers="${g.numbers.join(',')}" title="Click to select these ${g.numbers.length} numbers">
-                            <span class="vx-gnums">${nums}</span>
+                            <span class="vx-gnums"><span class="vx-gtrend">${gArrow}</span>${nums}</span>
                             <span class="vx-gcell">${g.count || 0}</span>
                             <span class="vx-gcell gap ${gapState}">${gapText}</span>
                             <span class="vx-gcell heat">${heatPct}%</span>
@@ -2642,7 +2687,9 @@
            .vx-gcell.heat { color: #3fb950; }
            .vx-gcell.gap.now { color: #3fb950; }
            .vx-gcell.gap.due { color: #d6a700; }
-           .vx-gcell.gap.overdue { color: #e0913a; }
+           .vx-gcell.gap.overdue { color: #e0913a; font-weight: 600; text-shadow: 0 0 6px rgba(224, 145, 58, 0.85); }
+           .vx-gtrend { display: inline-flex; vertical-align: middle; margin-right: 3px; }
+           .vx-gtrend:empty { display: none; }
            .vx-combo-star {
                background: transparent;
                border: none;
@@ -3220,11 +3267,13 @@
             }
 
             // Fast update using cached references
+            const heatScores = this.computeHeatScores();
             for (let i = 0; i < N; i++) {
                 const occurrences = hotNumbers[i];
                 const cached = this.heatmapCells[i];
 
                 cached.countSpan.textContent = occurrences;
+                cached.cell.title = `#${i + 1} · heat ${heatScores[i + 1]}/100 · drawn ${occurrences}×`;
 
                 if (cached.momSlot) {
                     const state = this._momentum ? this._momentum[i + 1] : 'flat';
