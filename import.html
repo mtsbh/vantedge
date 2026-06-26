@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Vantedge — Import Legend Stats</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0f1923;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 20px;
+      padding: 40px;
+    }
+    h2 { font-size: 22px; color: #f0c040; }
+    p  { font-size: 14px; color: #aaa; text-align: center; max-width: 420px; line-height: 1.6; }
+    label.pick-btn {
+      display: inline-block;
+      padding: 12px 32px;
+      background: linear-gradient(135deg, #27ae60, #2ecc71);
+      color: #fff;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 600;
+      transition: opacity .2s;
+    }
+    label.pick-btn:hover { opacity: .85; }
+    #status {
+      font-size: 14px;
+      min-height: 20px;
+      text-align: center;
+    }
+    .ok  { color: #2ecc71; }
+    .err { color: #e74c3c; }
+  </style>
+</head>
+<body>
+  <h2>🏆 Import Legend Stats</h2>
+  <p>Select the JSON file you previously exported from Vantedge.<br>
+     Your existing stats will be merged with the imported data.</p>
+
+  <input type="file" id="fileInput" accept=".json" style="display:none">
+  <label class="pick-btn" for="fileInput">📂 Choose JSON File</label>
+
+  <div id="status"></div>
+
+  <script src="import.js"></script>
+</body>
+</html>

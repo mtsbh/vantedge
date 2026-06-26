@@ -1,0 +1,131 @@
+{
+  "manifest_version": 3,
+  "name": "Vantedge",
+  "version": "3.25",
+  "description": "Real-time analytics and insights for online gaming",
+  "permissions": [
+    "storage",
+    "tabs",
+    "alarms"
+  ],
+  "commands": {
+    "toggle-overlay": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+K",
+        "mac": "Command+Shift+K"
+      },
+      "description": "Toggle Vantedge overlay visibility"
+    }
+  },
+  "host_permissions": [
+    "https://stake.com/*",
+    "https://stake.us/*",
+    "https://stake.games/*",
+    "https://stake.bet/*",
+    "https://rainbet.com/*",
+    "https://roobet.com/*",
+    "https://shuffle.com/*",
+    "https://betfury.com/*",
+    "https://winna.com/*",
+    "https://games.winna.com/*",
+    "https://originals.winna.com/*",
+    "https://acebet.com/*",
+    "https://acebet.co/*",
+    "https://*.pragmaticplaylive.net/*",
+    "https://api.github.com/*",
+    "https://gist.githubusercontent.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["storage-manager.js", "cloud-sync.js", "background.js"]
+  },
+  "action": {
+    "default_popup": "/popup/popup.html",
+    "default_icon": {
+      "16": "images/16.png",
+      "32": "images/32.png",
+      "48": "images/48.png",
+      "128": "images/128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://stake.com/*",
+        "https://stake.us/*",
+        "https://stake.games/*",
+        "https://stake.bet/*",
+        "https://rainbet.com/*",
+        "https://roobet.com/*",
+        "https://shuffle.com/*",
+        "https://betfury.com/*",
+        "https://winna.com/*",
+        "https://games.winna.com/*",
+        "https://originals.winna.com/*",
+        "https://acebet.com/*",
+        "https://acebet.co/*",
+        "https://*.pragmaticplaylive.net/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "https://stake.com/casino/games/*keno*",
+        "https://stake.us/casino/games/*keno*",
+        "https://stake.games/casino/games/*keno*",
+        "https://stake.bet/casino/games/*keno*",
+        "https://rainbet.com/casino/originals/keno*",
+        "https://rainbet.com/casino/games/*keno*",
+        "https://roobet.com/casino/*keno*",
+        "https://roobet.com/originals/*keno*",
+        "https://roobet.com/game/*keno*",
+        "https://roobet.com/casino/game/*keno*",
+        "https://shuffle.com/games/originals/keno*",
+        "https://shuffle.com/games/*keno*",
+        "https://betfury.com/casino/games/*keno*",
+        "https://winna.com/game/originals/keno*",
+        "https://winna.com/game/*keno*",
+        "https://acebet.com/crypto-casino/originals/keno*",
+        "https://acebet.co/crypto-casino/originals/keno*"
+      ],
+      "js": ["overlay.js"],
+      "css": [],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": [
+        "https://stake.com/*",
+        "https://stake.us/*",
+        "https://stake.ac/*",
+        "https://stake.games/*",
+        "https://stake.bet/*",
+        "https://stake.pet/*",
+        "https://rainbet.com/*",
+        "https://roobet.com/*",
+        "https://shuffle.com/*",
+        "https://betfury.com/*",
+        "https://winna.com/*",
+        "https://games.winna.com/*",
+        "https://originals.winna.com/*",
+        "https://acebet.com/*",
+        "https://acebet.co/*",
+        "https://*.pragmaticplaylive.net/*"
+      ]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "vantedge@ahbh.top",
+      "strict_min_version": "109.0"
+    }
+  }
+}

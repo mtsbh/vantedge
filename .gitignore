@@ -1,0 +1,13 @@
+node_modules
+
+# Build artifacts — zip the folder for distribution, don't commit the zip
+*.zip
+
+# Personal data exports — never commit these
+my-legend-stats.json
+*-legend-stats-*.json
+vantedge-legend-stats-*.json
+
+# OS
+.DS_Store
+Thumbs.db
