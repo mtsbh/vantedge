@@ -635,30 +635,14 @@
                 cold: `Numbers drawn 15%+ BELOW expected (~${exp}× each so far). How many are running cold.`,
                 pl: 'Net units on real-money bets: sum of (multiplier − 1). Free ($0) bets are excluded.'
             };
-            const tile = (icon, label, value, cls = '', title = '') =>
-                `<div class="vx-stat" title="${title}">
-                    <div class="vx-stat-k">${this.statIcon(icon, cls)}<span>${label}</span></div>
-                    <div class="vx-stat-v ${cls}">${value}</div>
-                </div>`;
-            const plIcon = pl < -0.05 ? 'pldown' : 'pl';
+            const tile = (label, value, cls = '', title = '') =>
+                `<div class="vx-stat" title="${title}"><span class="vx-stat-k">${label}</span><span class="vx-stat-v ${cls}">${value}</span></div>`;
             el.innerHTML =
-                tile('bets', 'Bets', bets.toLocaleString(), '', tip.bets) +
-                tile('hot', 'Hot', bets ? hot : '—', 'hot', tip.hot) +
-                tile('cold', 'Cold', bets ? cold : '—', 'cold', tip.cold) +
+                tile('Bets', bets.toLocaleString(), '', tip.bets) +
+                tile('Hot', bets ? hot : '—', 'hot', tip.hot) +
+                tile('Cold', bets ? cold : '—', 'cold', tip.cold) +
                 // Only real-money bets have P/L; free ($0) play shows "—".
-                tile(plIcon, 'P/L', hasPaid ? this.plFmt(pl) : '—', hasPaid ? plCls : '', tip.pl);
-        }
-
-        // Small monochrome icon for a status tile; cls tints it to match the value.
-        statIcon(name, cls = '') {
-            const P = {
-                bets: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
-                hot: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
-                cold: '<line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/><path d="m20 16-4-4 4-4"/><path d="m4 8 4 4-4 4"/><path d="m16 4-4 4-4-4"/><path d="m8 20 4-4 4 4"/>',
-                pl: '<polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/>',
-                pldown: '<polyline points="3 7 9 13 13 9 21 17"/><polyline points="15 17 21 17 21 11"/>'
-            };
-            return `<svg class="vx-stat-ic ${cls}" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[name] || ''}</svg>`;
+                tile('P/L', hasPaid ? this.plFmt(pl) : '—', hasPaid ? plCls : '', tip.pl);
         }
 
         // Top co-occurring number trios from recent draws. Strength is each trio's
@@ -2546,40 +2530,34 @@
            .vx-status-strip {
                display: grid;
                grid-template-columns: repeat(4, 1fr);
-               gap: 6px;
-               padding: 10px 12px;
+               gap: 5px;
+               padding: 7px 12px;
                border-bottom: 1px solid rgba(255, 255, 255, 0.10);
            }
            .vx-stat {
+               display: flex;
+               align-items: baseline;
+               justify-content: space-between;
+               gap: 4px;
                background: linear-gradient(160deg, #161e2a, #0f151e);
                border: 1px solid rgba(255, 255, 255, 0.08);
-               border-radius: 9px;
-               padding: 8px 10px;
+               border-radius: 7px;
+               padding: 4px 8px;
                min-width: 0;
-               box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
            }
            .vx-stat-k {
-               display: flex;
-               align-items: center;
-               gap: 5px;
                font-size: 9px;
                font-weight: 500;
                color: #7d8694;
                text-transform: uppercase;
-               letter-spacing: 0.7px;
+               letter-spacing: 0.5px;
            }
-           .vx-stat-ic { flex: 0 0 auto; color: #7d8694; }
-           .vx-stat-ic.hot, .vx-stat-ic.heat { color: #3fb950; }
-           .vx-stat-ic.cold { color: #58a6ff; }
-           .vx-stat-ic.plneg { color: #e5534b; }
            .vx-stat-v {
-               font-size: 18px;
+               font-size: 14px;
                font-weight: 600;
-               margin-top: 5px;
                color: #e6edf3;
                white-space: nowrap;
                font-variant-numeric: tabular-nums;
-               letter-spacing: 0.2px;
            }
            .vx-stat-v.hot { color: #3fb950; }
            .vx-stat-v.cold { color: #58a6ff; }
