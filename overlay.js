@@ -48,7 +48,7 @@
             this._momentum = null;
             // Bump when the curated main/drawer strategy set changes so a stale saved
             // strategyOrder/sideDrawerStrategies is reset to the new defaults once.
-            this.LAYOUT_VERSION = 2;
+            this.LAYOUT_VERSION = 3;
 
             const browserAPI = (typeof browser !== 'undefined' && browser?.storage) ? browser :
                 (typeof chrome !== 'undefined' && chrome?.storage) ? chrome : null;
@@ -106,7 +106,6 @@
                 variance: { name: "Variance", method: "Chi-Square/Z-Score", description: "Uses statistical tests (Chi-Square or Z-Score) to find numbers with significant deviations from expected frequency.", usage: "Best for: High-confidence statistical analysis." },
                 positional: { name: "Positional", method: "Grid Zone Analysis + Chi-Square", description: "Analyzes 8x5 grid with chi-square validation to detect statistically significant row/column biases (p<0.05).", usage: "Best for: Scientific detection of spatial RNG biases. Top performer on Stake!" },
                 hotzone: { name: "Hotzone", method: "2-D Grid-Block Density", description: "Sibling of Positional that scans 2×2 blocks of the board instead of whole rows/columns, so it catches a bias localized to a corner or the center that row/column averages dilute away. Z-score gated; weights the spatial signal by block significance and falls back to Hot when no zone is real.", usage: "Best for: Localized spatial RNG hotspots that Positional's marginals miss." },
-                sector: { name: "Sector", method: "Board-Region Concentration", description: "Splits the board into quadrant-sized sectors, finds the one that's hottest right now, and fills most of the pick from it — ranked by each number's own heat (frequency + recency) so the exact picks shift — plus 1–2 spillover numbers from the next-hottest area elsewhere, since draws rarely land 100% in one zone.", usage: "Best for: Sessions where hits visibly cluster in one region of the board." },
                 progressive: { name: "Progressive", method: "Momentum Analysis", description: "Calculates a momentum score (frequency / recency) to find accelerating numbers.", usage: "Best for: Spotting numbers heating up now." },
 
                 // Row 3: Advanced Methods
@@ -128,7 +127,6 @@
                 // New strategies
                 cohesion: { name: "Cohesion", method: "Cluster Travel Analysis", description: "Measures how well a number travels with the current hot cluster. Very strong on biased RNGs.", usage: "Best for: Finding numbers that cluster with current hot numbers." },
                 edge: { name: "Edge", method: "Kelly-Inspired Meta", description: "Kelly-inspired: favors strategies that performed well recently (uses legend/legendHits if available).", usage: "Best for: Meta-analysis of strategy performance." },
-                volregime: { name: "Regime", method: "Session Volatility Detection", description: "Detects chaotic vs stable sessions and adjusts selection accordingly.", usage: "Best for: Adapting to session volatility patterns." },
                 // User-pasted strategies (2026-05-13)
                 delta: { name: "Delta", method: "Sequential Gap Pattern", description: "Analyzes deltas (gaps) between numbers in past winning combinations. Picks the most-frequent delta pattern, anchors on the hottest number, then walks the pattern around the 1-40 ring.", usage: "Best for: Sessions of 30+ games where gap structure may repeat." },
                 regression: { name: "Regression", method: "Linear Trend on Intervals", description: "Linear regression on each number's last 15 occurrence intervals. Scores numbers with statistically meaningful negative slope (decreasing gaps → accelerating). r² > 0.25 gate.", usage: "Best for: 40+ games. Only meaningful if the RNG drifts." },
@@ -136,9 +134,6 @@
                 comboways: { name: "Combo", method: "Way-Ticket Grouping", description: "Groups the top 15 hot numbers into overlapping subsets, mimicking 'way tickets' — spreads selections for more partial-match hits.", usage: "Best for: Variance reduction via partial matches. Coverage, not edge." },
                 condbonus: { name: "Bonus", method: "Order-Probability Weighting", description: "Targets numbers with low betsSince × high count — i.e., recent AND frequent. Designed for variants with first/last-draw bonuses.", usage: "Best for: Variant Keno games with order-based multipliers." },
                 // Re-added historical strategies
-                mix: { name: "Mix", method: "Hot + Cold Blend", description: "Blends the top hot numbers with a selection of cold numbers for a diversified pick that covers both ends of the frequency spectrum.", usage: "Best for: Hedging — captures both trend-following and mean-reversion signals." },
-                surge: { name: "Surge", method: "Acceleration Detection", description: "Finds numbers whose recent appearance rate is accelerating — hit multiple times in the most recent window relative to their overall average.", usage: "Best for: Catching numbers mid-surge before the crowd notices." },
-                bounce: { name: "Bounce", method: "Extreme Mean-Reversion", description: "Targets numbers that were very hot but have recently gone cold, expecting them to bounce back toward their historical average.", usage: "Best for: Mean-reversion play on formerly hot numbers in a lull." },
                 bayesian: { name: "Bayesian", method: "Dynamic Posterior Update", description: "Maintains a Bayesian posterior for each number's hit probability, updating after every draw. Selects numbers with the highest posterior-weighted scores.", usage: "Best for: Statistically grounded probability estimates that sharpen with more data." },
                 montecarlo: { name: "MonteCarlo", method: "200-Sim Weighted Sampling", description: "Runs 200 simulations of future draws using empirical frequencies, then picks the 9 numbers that appear most across all simulations.", usage: "Best for: Robust picks under uncertainty — smooths over small-sample noise." },
                 coverage: { name: "Coverage", method: "Hot + Max-Spread Hybrid", description: "Selects top hot numbers plus additional numbers that maximize coverage of the board, combining frequency bias with spatial spread.", usage: "Best for: Maximizing partial hits by covering both hot zones and gaps." },
@@ -1246,7 +1241,6 @@
                 variance: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
                 positional: '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/>',
                 hotzone: '<rect x="3" y="3" width="18" height="18" rx="2"/><rect x="8" y="8" width="8" height="8"/>',
-                sector: '<circle cx="12" cy="12" r="9"/><polygon points="16 8 10 10 8 16 14 14 16 8"/>',
                 progressive: '<polyline points="3 17 9 11 13 15 21 7"/><polyline points="15 7 21 7 21 13"/>',
                 transition: '<path d="M21 12a9 9 0 1 1-3-6.7"/><polyline points="21 3 21 9 15 9"/>',
                 entropy: '<circle cx="12" cy="12" r="1"/><path d="M20.2 20.2c2.04-2.03.02-7.36-4.5-11.9-4.54-4.52-9.87-6.54-11.9-4.5-2.04 2.03-.02 7.36 4.5 11.9 4.54 4.52 9.87 6.54 11.9 4.5Z"/><path d="M15.7 15.7c4.52-4.54 6.54-9.87 4.5-11.9-2.03-2.04-7.36-.02-11.9 4.5-4.52 4.54-6.54 9.87-4.5 11.9 2.03 2.04 7.36.02 11.9-4.5Z"/>',
@@ -1260,15 +1254,11 @@
                 regime: '<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>',
                 cohesion: '<path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/>',
                 edge: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
-                volregime: '<path d="M2 6c2 0 2 2 4 2s2-2 4-2 2 2 4 2 2-2 4-2 2 2 4 2"/><path d="M2 12c2 0 2 2 4 2s2-2 4-2 2 2 4 2 2-2 4-2 2 2 4 2"/><path d="M2 18c2 0 2 2 4 2s2-2 4-2 2 2 4 2 2-2 4-2 2 2 4 2"/>',
                 delta: '<path d="M12 4 4 19h16z"/>',
                 regression: '<path d="M21.3 8.7 8.7 21.3a1 1 0 0 1-1.4 0l-4.6-4.6a1 1 0 0 1 0-1.4L15.3 2.7a1 1 0 0 1 1.4 0l4.6 4.6a1 1 0 0 1 0 1.4z"/><path d="m7.5 10.5 2 2"/><path d="m10.5 7.5 2 2"/><path d="m13.5 4.5 2 2"/>',
                 portfolio: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>',
                 comboways: '<path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/><line x1="13" y1="5" x2="13" y2="19"/>',
                 condbonus: '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8"/><path d="M16.5 8a2.5 2.5 0 0 0 0-5C13 3 12 8 12 8"/>',
-                mix: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
-                surge: '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/>',
-                bounce: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 0 0 18"/><path d="M12 3a15 15 0 0 1 0 18"/>',
                 bayesian: '<path d="M4 4h16"/><path d="m4 4 8 8-8 8h16"/>',
                 montecarlo: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1"/><circle cx="15.5" cy="8.5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="8.5" cy="15.5" r="1"/><circle cx="15.5" cy="15.5" r="1"/>',
                 coverage: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
@@ -1487,18 +1477,13 @@
         // TAG: SIDE-DRAWER
         SIDE_DRAWER_DEFAULTS = [
             { id: 'hotzone', name: 'Hotzone' },
-            { id: 'sector', name: 'Sector' },
             { id: 'edge', name: 'Edge' },
             { id: 'adaptive', name: 'Adaptive' },
-            { id: 'volregime', name: 'Regime' },
             { id: 'delta', name: 'Delta' },
             { id: 'regression', name: 'Regression' },
             { id: 'portfolio', name: 'Portfolio' },
             { id: 'comboways', name: 'Combo' },
             { id: 'condbonus', name: 'Conditional' },
-            { id: 'mix', name: 'Mix' },
-            { id: 'surge', name: 'Surge' },
-            { id: 'bounce', name: 'Bounce' },
             { id: 'bayesian', name: 'Bayesian' },
             { id: 'coverage', name: 'Coverage' },
             { id: 'wheeling', name: 'Wheeling' },
@@ -1617,7 +1602,6 @@
                 'variance': 'selectVarianceNumbers',
                 'positional': 'selectPositionalNumbers',
                 'hotzone': 'selectHotzoneNumbers',
-                'sector': 'selectSectorNumbers',
                 'progressive': 'selectProgressiveNumbers',
                 'transition': 'selectTransitionNumbers',
                 'entropy': 'selectEntropyNumbers',
@@ -1631,16 +1615,12 @@
                 'regime': 'selectRegimeNumbers',
                 'cohesion': 'selectCohesionNumbers',
                 'edge': 'selectEdgeNumbers',
-                'volregime': 'selectVolatilityRegimeNumbers',
                 'delta': 'selectDeltaPatternNumbers',
                 'regression': 'selectRegressionNumbers',
                 'portfolio': 'selectPortfolioNumbers',
                 'comboways': 'selectCombinatorialWaysNumbers',
                 'condbonus': 'selectConditionalBonusNumbers',
                 // Re-added historical strategies
-                'mix': 'selectMixNumbers',
-                'surge': 'selectSurgeNumbers',
-                'bounce': 'selectBounceNumbers',
                 'bayesian': 'selectBayesianNumbers',
                 'montecarlo': 'selectMonteCarloNumbers',
                 'coverage': 'selectCoverageNumbers',
@@ -1883,8 +1863,7 @@
                 // Get strategy info
                 const strategyInfo = {
                     antipattern: { id: 'antipattern', name: 'Anti-Pattern' },
-                    variance: { id: 'variance', name: 'Variance' },
-                    volregime: { id: 'volregime', name: 'Vol Regime' }
+                    variance: { id: 'variance', name: 'Variance' }
                 }[strategyId];
 
                 if (strategyInfo) {
@@ -1905,8 +1884,7 @@
                         this.setActiveButton(strategyId);
                         const methodMap = {
                             'antipattern': 'selectAntiPatternNumbers',
-                            'variance': 'selectVarianceNumbers',
-                            'volregime': 'selectVolatilityRegimeNumbers'
+                            'variance': 'selectVarianceNumbers'
                         };
                         const methodName = methodMap[strategyId];
                         if (methodName && typeof this[methodName] === 'function') {
@@ -3995,94 +3973,6 @@
             this.animateSequentialSelection(numbers);
         }
 
-        // --- Strategy: Sector (board-region concentration) ---
-        // Splits the board into quadrant‑sized SECTORS, finds the sector that's
-        // hottest right now, and fills most of the pick from it — ranked by each
-        // number's own heat so the exact numbers shift as the session evolves —
-        // then adds 1–2 "spillover" picks from the next‑hottest numbers elsewhere
-        // on the board (draws are rarely 100% in one zone, so a couple land in
-        // another sector, often the opposite side). Nothing is hardcoded: both the
-        // dominant sector and every pick are chosen from live frequency + recency.
-        getSectorNumbers(count = 9) {
-            if (this.data.kenoStats.totalBets < 20) return this.getHotNumbers(count);
-
-            const cols = this.gridCols;          // 8 in all known variants
-            const rows = this.gridRows;          // 5 classic / 7 extreme
-            const N = this.numberCount;
-            const hot = this.data.kenoStats.hotNumbers;
-            const stats = this.data.kenoStats.perNumberStats;
-            const totalBets = this.data.kenoStats.totalBets;
-
-            const totalHits = hot.reduce((a, b) => a + b, 0);
-            if (totalHits <= 0) return this.getHotNumbers(count);
-
-            // Per‑number heat = frequency with a mild recency boost, so a sector
-            // that's active *now* outranks one that ran hot long ago and the picks
-            // don't freeze on the same numbers.
-            const heat = new Float32Array(N);
-            for (let i = 0; i < N; i++) {
-                const freq = hot[i] || 0;
-                const bs = stats[i]?.betsSince;
-                const recency = (bs != null && bs >= 0)
-                    ? Math.max(0, 1 - bs / Math.max(totalBets, 1)) : 0;
-                heat[i] = freq * (1 + 0.5 * recency);
-            }
-
-            // Tile the board into ~quadrant‑sized sectors (half the board per axis).
-            const sw = Math.ceil(cols / 2);      // 4
-            const sh = Math.ceil(rows / 2);      // 3 (rows=5) / 4 (rows=7)
-            const sectors = [];
-            for (let sr = 0; sr < rows; sr += sh) {
-                for (let sc = 0; sc < cols; sc += sw) {
-                    const members = [];
-                    let score = 0;
-                    for (let r = sr; r < Math.min(sr + sh, rows); r++) {
-                        for (let c = sc; c < Math.min(sc + sw, cols); c++) {
-                            const i = r * cols + c;
-                            if (i < 0 || i >= N) continue;
-                            members.push(i);
-                            score += heat[i];
-                        }
-                    }
-                    if (members.length) sectors.push({ members, score });
-                }
-            }
-            if (sectors.length === 0) return this.getHotNumbers(count);
-            sectors.sort((a, b) => b.score - a.score);
-
-            const rankByHeat = (idxs) => idxs.slice().sort((a, b) =>
-                heat[b] - heat[a] || (stats[a]?.betsSince ?? 1e9) - (stats[b]?.betsSince ?? 1e9));
-
-            // Most picks come from the dominant sector...
-            const spill = Math.min(2, count - 1);   // 1–2 from elsewhere
-            const primaryTake = count - spill;
-            const picked = [];
-            for (const i of rankByHeat(sectors[0].members)) {
-                if (picked.length < primaryTake) picked.push(i);
-            }
-            // ...the rest from the hottest numbers OUTSIDE that sector (the
-            // "one or two, maybe opposite" picks — chosen by heat, not fixed).
-            const primarySet = new Set(sectors[0].members);
-            const outside = [];
-            for (let i = 0; i < N; i++) if (!primarySet.has(i)) outside.push(i);
-            for (const i of rankByHeat(outside)) {
-                if (picked.length < count) picked.push(i);
-            }
-            // Safety fill (sparse data / tiny boards).
-            if (picked.length < count) {
-                for (const n of this.getHotNumbers(count * 2)) {
-                    const i = n - 1;
-                    if (!picked.includes(i) && picked.length < count) picked.push(i);
-                }
-            }
-
-            return picked.slice(0, count).map(i => i + 1);
-        }
-        selectSectorNumbers() {
-            const numbers = this.getSectorNumbers();
-            this.animateSequentialSelection(numbers);
-        }
-
         // --- Strategy: Anti-Pattern ---
         getAntiPatternNumbers(count = 9) {
             const totalBets = this.data.kenoStats.totalBets;
@@ -4254,35 +4144,6 @@
         }
         selectEdgeNumbers() {
             const numbers = this.getEdgeNumbers();
-            this.animateSequentialSelection(numbers);
-        }
-
-        // --- Strategy: Volatility Regime (NEW) ---
-        getVolatilityRegimeNumbers(count = 9) {
-            if (this.data.kenoStats.totalBets < 30) return this.getHotNumbers(count);
-            const stats = this.data.kenoStats.perNumberStats;
-
-            // Calculate regime: are we in high or low volatility?
-            const entropies = stats.map(s => s.entropy || 0);
-            const avgEntropy = entropies.reduce((a, b) => a + b, 0) / entropies.length;
-
-            return stats
-                .map((s, i) => {
-                    if (s.count < 2) return { n: i + 1, score: 0 };
-                    // In high volatility regime, prefer numbers with stable intervals (low entropy)
-                    // In low volatility regime, prefer numbers with high frequency
-                    const regimeScore = avgEntropy > 1 ?
-                        (100 - s.entropy) * Math.sqrt(s.count) :
-                        s.count * (s.avgInterval > 0 ? 1 / s.avgInterval : 0);
-                    return { n: i + 1, score: regimeScore };
-                })
-                .filter(x => x.score > 0)
-                .sort((a, b) => b.score - a.score)
-                .slice(0, count)
-                .map(x => x.n);
-        }
-        selectVolatilityRegimeNumbers() {
-            const numbers = this.getVolatilityRegimeNumbers();
             this.animateSequentialSelection(numbers);
         }
 
@@ -4480,74 +4341,6 @@
         // =====================================================================
         // RESTORED STRATEGIES (recovered from git history)
         // =====================================================================
-
-        // --- Strategy: Mix (Hot + Cold Blend) ---
-        getMixNumbers(count = 9) {
-            const hot = this.getHotNumbers(Math.floor(count / 2));
-            const cold = this.getColdNumbers(count - Math.floor(count / 2));
-            return [...new Set([...hot, ...cold])].slice(0, count);
-        }
-        selectMixNumbers() {
-            const numbers = this.getMixNumbers();
-            this.animateSequentialSelection(numbers);
-        }
-
-        // --- Strategy: Surge (Acceleration Detection) ---
-        getSurgeNumbers(count = 9) {
-            const totalBets = this.data.kenoStats.totalBets;
-            if (totalBets < 30) return this.getHotNumbers(count);
-            const recentWindow = Math.min(10, Math.floor(totalBets * 0.1));
-            const scores = [];
-            for (let i = 0; i < this.numberCount; i++) {
-                const s = this.data.kenoStats.perNumberStats[i];
-                if (!s || s.count < 5) continue;
-                const recentApps = s.lastOccurrences.filter(g => g >= (totalBets - recentWindow)).length;
-                const recentRate = recentApps / recentWindow;
-                const historicalRate = s.count / totalBets;
-                const acceleration = historicalRate > 0 ? recentRate / historicalRate : 0;
-                if (acceleration >= 1.5) scores.push({ n: i + 1, acceleration });
-            }
-            scores.sort((a, b) => b.acceleration - a.acceleration);
-            let selected = scores.slice(0, count).map(s => s.n);
-            if (selected.length < count) {
-                const fillers = this.getHotNumbers(count * 2).filter(n => !selected.includes(n));
-                selected.push(...fillers.slice(0, count - selected.length));
-            }
-            return selected.slice(0, count);
-        }
-        selectSurgeNumbers() {
-            const numbers = this.getSurgeNumbers();
-            this.animateSequentialSelection(numbers);
-        }
-
-        // --- Strategy: Bounce (Extreme Mean-Reversion) ---
-        getBounceNumbers(count = 9) {
-            const totalBets = this.data.kenoStats.totalBets;
-            if (totalBets < 50) return this.getColdNumbers(count);
-            const expectedApps = totalBets * (10 / this.numberCount); // 10 drawn per game out of N
-            const scores = [];
-            for (let i = 0; i < this.numberCount; i++) {
-                const s = this.data.kenoStats.perNumberStats[i];
-                if (!s) continue;
-                const freqDev = (expectedApps - s.count) / Math.max(expectedApps, 1);
-                const avgInterval = s.count > 0 ? totalBets / s.count : totalBets;
-                const overdueRatio = s.betsSince / Math.max(avgInterval, 1);
-                if (freqDev > 0.3 && overdueRatio > 1.5) {
-                    scores.push({ n: i + 1, score: freqDev * overdueRatio });
-                }
-            }
-            scores.sort((a, b) => b.score - a.score);
-            let selected = scores.slice(0, count).map(s => s.n);
-            if (selected.length < count) {
-                const fillers = this.getColdNumbers(count * 2).filter(n => !selected.includes(n));
-                selected.push(...fillers.slice(0, count - selected.length));
-            }
-            return selected.slice(0, count);
-        }
-        selectBounceNumbers() {
-            const numbers = this.getBounceNumbers();
-            this.animateSequentialSelection(numbers);
-        }
 
         // --- Strategy: Bayesian (Dynamic Posterior Scoring) ---
         getBayesianNumbers(count = 9) {
@@ -4760,7 +4553,6 @@
                 variance: (c) => this.getVarianceNumbers(c),
                 positional: (c) => this.getPositionalNumbers(c),
                 hotzone: (c) => this.getHotzoneNumbers(c),
-                sector: (c) => this.getSectorNumbers(c),
                 progressive: (c) => this.getProgressiveNumbers(c),
                 transition: (c) => this.getTransitionNumbers(c),
                 entropy: (c) => this.getEntropyNumbers(c),
@@ -4782,7 +4574,6 @@
                 streak: ['cold', 'transition'],
                 positional: ['ema', 'overdue'],
                 hotzone: ['positional', 'ema'],
-                sector: ['positional', 'hotzone'],
                 progressive: ['streak', 'hot'],
                 poisson: ['positional', 'cold'],
                 entropy: ['ema', 'positional'],
@@ -5067,38 +4858,6 @@
 
         selectCohesionNumbers() {
             const numbers = this.getCohesionNumbers();
-            this.animateSequentialSelection(numbers);
-        }
-
-        // TAG: NEW-STRATEGY-VOLATILITY-REGIME
-        getVolatilityRegimeNumbers(count = 9) {
-            const siteKey = `${this.storageOrigin}-keno-session`;
-            const results = this.cachedKenoResults?.[siteKey] || [];
-            if (results.length < 40) return this.getSmartNumbers(count);
-
-            const recentHits = results.slice(-30).map(r => r?.state?.drawnNumbers?.length || 0);
-            const mean = recentHits.reduce((a, b) => a + b, 0) / recentHits.length;
-            const variance = recentHits.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / recentHits.length;
-            const volatility = Math.sqrt(variance);
-
-            const isHighVol = volatility > 1.8; // Quite chaotic session
-
-            if (isHighVol) {
-                // High volatility → favor balanced + stable strategies
-                const votes = new Float32Array(this.numberCount + 1);
-                this.getSmartNumbers(12).forEach(n => votes[n] += 2);
-                this.getEntropyNumbers(12).forEach(n => votes[n] += 2);
-                this.getPositionalNumbers(12).forEach(n => votes[n] += 1.5);
-                return Array.from({ length: this.numberCount }, (_, i) => ({ n: i + 1, v: votes[i + 1] }))
-                    .sort((a, b) => b.v - a.v).slice(0, count).map(x => x.n);
-            } else {
-                // Low volatility → momentum plays
-                return this.getEMANumbers(count);
-            }
-        }
-
-        selectVolatilityRegimeNumbers() {
-            const numbers = this.getVolatilityRegimeNumbers();
             this.animateSequentialSelection(numbers);
         }
 
