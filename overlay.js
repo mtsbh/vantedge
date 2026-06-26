@@ -131,8 +131,8 @@
                 delta: { name: "Delta", method: "Sequential Gap Pattern", description: "Analyzes deltas (gaps) between numbers in past winning combinations. Picks the most-frequent delta pattern, anchors on the hottest number, then walks the pattern around the 1-40 ring.", usage: "Best for: Sessions of 30+ games where gap structure may repeat." },
                 regression: { name: "Regression", method: "Linear Trend on Intervals", description: "Linear regression on each number's last 15 occurrence intervals. Scores numbers with statistically meaningful negative slope (decreasing gaps → accelerating). r² > 0.25 gate.", usage: "Best for: 40+ games. Only meaningful if the RNG drifts." },
                 portfolio: { name: "Portfolio", method: "Sharpe-Style Heat/Risk", description: "Heat ÷ entropy as a Sharpe-like ratio. Favors numbers with strong heat AND low variance in their interval pattern.", usage: "Best for: Variance reduction. Doesn't change EV." },
-                comboways: { name: "Combo", method: "Way-Ticket Grouping", description: "Groups the top 15 hot numbers into overlapping subsets, mimicking 'way tickets' — spreads selections for more partial-match hits.", usage: "Best for: Variance reduction via partial matches. Coverage, not edge." },
-                condbonus: { name: "Bonus", method: "Order-Probability Weighting", description: "Targets numbers with low betsSince × high count — i.e., recent AND frequent. Designed for variants with first/last-draw bonuses.", usage: "Best for: Variant Keno games with order-based multipliers." },
+                comboways: { name: "Cluster", method: "Co-Occurrence Clustering", description: "Builds a set from numbers that land together in the same draws — seeds from the hottest number and grows by total co-occurrence — so the pick clusters tightly for more partial-match coverage.", usage: "Best for: Sessions where certain numbers keep showing up together." },
+                condbonus: { name: "Pulse", method: "Recency × Frequency", description: "Scores each number by overall frequency × how recently it last hit, boosted by hits in the last 20 draws — surfacing numbers that are frequent AND active right now.", usage: "Best for: Riding numbers heating up in the current session." },
                 // Re-added historical strategies
                 bayesian: { name: "Bayesian", method: "Dynamic Posterior Update", description: "Maintains a Bayesian posterior for each number's hit probability, updating after every draw. Selects numbers with the highest posterior-weighted scores.", usage: "Best for: Statistically grounded probability estimates that sharpen with more data." },
                 montecarlo: { name: "MonteCarlo", method: "200-Sim Weighted Sampling", description: "Runs 200 simulations of future draws using empirical frequencies, then picks the 9 numbers that appear most across all simulations.", usage: "Best for: Robust picks under uncertainty — smooths over small-sample noise." },
@@ -1257,8 +1257,8 @@
                 delta: '<path d="M12 4 4 19h16z"/>',
                 regression: '<path d="M21.3 8.7 8.7 21.3a1 1 0 0 1-1.4 0l-4.6-4.6a1 1 0 0 1 0-1.4L15.3 2.7a1 1 0 0 1 1.4 0l4.6 4.6a1 1 0 0 1 0 1.4z"/><path d="m7.5 10.5 2 2"/><path d="m10.5 7.5 2 2"/><path d="m13.5 4.5 2 2"/>',
                 portfolio: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>',
-                comboways: '<path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/><line x1="13" y1="5" x2="13" y2="19"/>',
-                condbonus: '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5C11 3 12 8 12 8"/><path d="M16.5 8a2.5 2.5 0 0 0 0-5C13 3 12 8 12 8"/>',
+                comboways: '<line x1="7" y1="7" x2="16" y2="9"/><line x1="7" y1="7" x2="9" y2="16"/><line x1="16" y1="9" x2="17" y2="17"/><line x1="9" y1="16" x2="17" y2="17"/><circle cx="7" cy="7" r="2.2"/><circle cx="16" cy="9" r="2.2"/><circle cx="9" cy="16" r="2.2"/><circle cx="17" cy="17" r="2.2"/>',
+                condbonus: '<path d="M2 12h4l3 8 4-16 3 8h6"/>',
                 bayesian: '<path d="M4 4h16"/><path d="m4 4 8 8-8 8h16"/>',
                 montecarlo: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1"/><circle cx="15.5" cy="8.5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="8.5" cy="15.5" r="1"/><circle cx="15.5" cy="15.5" r="1"/>',
                 coverage: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
@@ -1482,8 +1482,8 @@
             { id: 'delta', name: 'Delta' },
             { id: 'regression', name: 'Regression' },
             { id: 'portfolio', name: 'Portfolio' },
-            { id: 'comboways', name: 'Combo' },
-            { id: 'condbonus', name: 'Conditional' },
+            { id: 'comboways', name: 'Cluster' },
+            { id: 'condbonus', name: 'Pulse' },
             { id: 'bayesian', name: 'Bayesian' },
             { id: 'coverage', name: 'Coverage' },
             { id: 'wheeling', name: 'Wheeling' },
@@ -4996,20 +4996,64 @@
             this.animateSequentialSelection(numbers);
         }
 
-        getCombinatorialWaysNumbers(count = 10) {
-            const hot = this.getHotNumbers(15);
-            const groups = [hot.slice(0, 5), hot.slice(5, 10)];
-            return [...new Set([...groups[0], ...groups[1], ...hot.slice(10)])].slice(0, count);
+        // --- Strategy: Cluster (co-occurrence) ---
+        // Numbers that land together: seed from the hottest, grow by total
+        // co-occurrence with the set so far, for a tightly-clustered pick.
+        getCombinatorialWaysNumbers(count = 9) {
+            const N = this.numberCount;
+            const draws = this.getRecentDraws(150);
+            if (draws.length < 20) return this.getHotNumbers(count);
+            const pair = Object.create(null);
+            const pk = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
+            draws.forEach(d => {
+                const u = [...new Set(d)].filter(n => n >= 1 && n <= N).sort((a, b) => a - b);
+                for (let i = 0; i < u.length; i++)
+                    for (let j = i + 1; j < u.length; j++)
+                        pair[u[i] + '-' + u[j]] = (pair[u[i] + '-' + u[j]] || 0) + 1;
+            });
+            const start = this.getHotNumbers(1)[0] || 1;
+            const picked = [start];
+            while (picked.length < count) {
+                let best = -1, bestScore = -1;
+                for (let n = 1; n <= N; n++) {
+                    if (picked.includes(n)) continue;
+                    let s = 0;
+                    for (const p of picked) s += pair[pk(p, n)] || 0;
+                    if (s > bestScore) { bestScore = s; best = n; }
+                }
+                if (best < 0) break;
+                picked.push(best);
+            }
+            if (picked.length < count) {
+                for (const n of this.getHotNumbers(count * 2)) {
+                    if (!picked.includes(n)) picked.push(n);
+                    if (picked.length >= count) break;
+                }
+            }
+            return picked.slice(0, count).sort((a, b) => a - b);
         }
         selectCombinatorialWaysNumbers() {
             const numbers = this.getCombinatorialWaysNumbers();
             this.animateSequentialSelection(numbers);
         }
 
+        // --- Strategy: Pulse (recency × frequency, recent-window boosted) ---
         getConditionalBonusNumbers(count = 9) {
-            if (this.data.kenoStats.totalBets < 50) return this.getHotNumbers(count);
-            return this.data.kenoStats.perNumberStats
-                .map((s, i) => ({ n: i + 1, s: (1 / (s.betsSince + 1)) * s.count }))
+            if (this.data.kenoStats.totalBets < 30) return this.getHotNumbers(count);
+            const N = this.numberCount;
+            const stats = this.data.kenoStats.perNumberStats;
+            const draws = this.getRecentDraws(20);
+            const recentWin = Math.max(1, draws.length);
+            const recent = new Array(N + 1).fill(0);
+            draws.forEach(d => d.forEach(n => { if (n >= 1 && n <= N) recent[n]++; }));
+            return stats
+                .map((s, i) => {
+                    const n = i + 1;
+                    const recency = 1 / (s.betsSince + 1);     // how recently it last hit
+                    const recentRate = recent[n] / recentWin;  // how often it's hit lately
+                    // frequent × recent, amplified by current-window activity
+                    return { n, s: s.count * recency * (1 + recentRate * 3) };
+                })
                 .sort((a, b) => b.s - a.s)
                 .slice(0, count)
                 .map(x => x.n);
