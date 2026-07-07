@@ -2028,7 +2028,7 @@
                    position: fixed;
                    top: 500px; left: 350px;
                    transform-origin: top left;
-                   width: 440px;
+                   width: 400px;
                    min-height: 450px;
                    max-height: 80vh;
                    background: linear-gradient(180deg, #0e141d 0%, #0b1017 100%);
@@ -2070,7 +2070,9 @@
                    height: 100vh !important;
                    min-height: 100vh !important;
                    max-height: 100vh !important;
-                   width: 440px;
+                   /* Responsive: ~400px on wide screens, shrinks on narrow ones so
+                      it always fits beside the game instead of overlapping it. */
+                   width: clamp(300px, 30vw, 400px);
                    border-radius: 0;
                    border-top: none;
                    border-right: none;
@@ -5090,8 +5092,8 @@
         }
 
         // --- Layout mode: floating overlay vs docked sidebar ---
-        // Width of the docked sidebar; kept in sync with the .sidebar-mode CSS.
-        static SIDEBAR_WIDTH = 440;
+        // Fallback only; pushPageForSidebar measures the real (responsive) width.
+        static SIDEBAR_WIDTH = 400;
 
         applyLayoutMode(mode) {
             this.layoutMode = (mode === 'sidebar') ? 'sidebar' : 'overlay';
@@ -5115,8 +5117,22 @@
             safe(() => {
                 const docEl = document.documentElement;
                 docEl.style.transition = 'margin-right 0.2s ease';
-                docEl.style.marginRight = on ? `${GeminyzerOverlay.SIDEBAR_WIDTH}px` : '';
+                // Measure the actual rendered sidebar width (it's responsive) so the
+                // reserved gap always matches — no over/under-push when resizing.
+                const w = (on && this.overlay) ? this.overlay.offsetWidth : 0;
+                docEl.style.marginRight = on ? `${w || GeminyzerOverlay.SIDEBAR_WIDTH}px` : '';
             });
+        }
+
+        // Keep the reserved gap matched to the (responsive) sidebar as the window
+        // resizes, so it never starts overlapping the game.
+        setupSidebarResize() {
+            if (this._sidebarResizeAdded) return;
+            this._sidebarResizeAdded = true;
+            const onResize = this.debounce(() => {
+                if (this.layoutMode === 'sidebar' && this.isVisible) this.pushPageForSidebar(true);
+            }, 150);
+            window.addEventListener('resize', onResize);
         }
 
         toggleLayoutMode() {
@@ -5124,9 +5140,12 @@
         }
 
         loadLayoutMode() {
+            this.setupSidebarResize();
             const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
-            const apply = (r) => this.applyLayoutMode((r && r.layoutMode) || 'overlay');
-            if (!browserAPI?.storage?.local) { this.applyLayoutMode('overlay'); return; }
+            // Default to the docked sidebar (the intended experience) when nothing
+            // is saved yet.
+            const apply = (r) => this.applyLayoutMode((r && r.layoutMode) || 'sidebar');
+            if (!browserAPI?.storage?.local) { this.applyLayoutMode('sidebar'); return; }
             const p = browserAPI.storage.local.get('layoutMode');
             if (p && typeof p.then === 'function') p.then(apply).catch(() => apply({}));
             else browserAPI.storage.local.get('layoutMode', apply);
