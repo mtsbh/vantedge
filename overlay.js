@@ -764,10 +764,16 @@
             const favOnly = !!this.showFavoritesOnly;
 
             const sizePills = [2, 3, 4, 5, 6, 7, 8, 9, 10].map(s =>
-                `<button class="vx-gsize ${s === size ? 'on' : ''}" data-size="${s}">${s}</button>`).join('');
+                `<button class="vx-gsize ${s === size ? 'on' : ''}" data-size="${s}" title="Groups of ${s} numbers that land together">${s}</button>`).join('');
 
+            const viewTips = {
+                hot: 'Hot — ranked by heat score (how often it hits × how overdue it is). The default "strongest now" view.',
+                frequent: 'Frequent — ranked by raw hit count. Groups that appear most often, overdue or not.',
+                overdue: 'Overdue — ranked by gap vs its expected interval. Groups that are "due".',
+                cold: 'Cold — least-frequent groups in the window (the dud pile).'
+            };
             const tabs = [['hot', 'Hot'], ['frequent', 'Frequent'], ['overdue', 'Overdue'], ['cold', 'Cold']].map(([v, label]) =>
-                `<button class="vx-gtab ${v === view ? 'on' : ''}" data-view="${v}">${label}</button>`).join('');
+                `<button class="vx-gtab ${v === view ? 'on' : ''}" data-view="${v}" title="${viewTips[v]}">${label}</button>`).join('');
 
             let groups;
             if (favOnly) {
@@ -826,10 +832,10 @@
             // Clickable column headers map to the matching ranking view.
             const car = (v) => view === v ? ' <span class="vx-gcar">▾</span>' : '';
             const head = `<div class="vx-ghead">
-                    <span class="vx-gnums">Group</span>
-                    <span class="vx-gcell vx-gsort ${view === 'frequent' ? 'on' : ''}" data-sortview="frequent">Hits${car('frequent')}</span>
-                    <span class="vx-gcell vx-gsort ${view === 'overdue' ? 'on' : ''}" data-sortview="overdue">Gap${car('overdue')}</span>
-                    <span class="vx-gcell vx-gsort ${view === 'hot' ? 'on' : ''}" data-sortview="hot">Heat${car('hot')}</span>
+                    <span class="vx-gnums" title="Click a row to select these numbers on the board">Group</span>
+                    <span class="vx-gcell vx-gsort ${view === 'frequent' ? 'on' : ''}" data-sortview="frequent" title="Hits — times this exact group was drawn together. Click to sort.">Hits${car('frequent')}</span>
+                    <span class="vx-gcell vx-gsort ${view === 'overdue' ? 'on' : ''}" data-sortview="overdue" title="Gap — draws since it last hit. NOW=just hit, yellow=due, amber glow=overdue (>1.5× expected). Click to sort.">Gap${car('overdue')}</span>
+                    <span class="vx-gcell vx-gsort ${view === 'hot' ? 'on' : ''}" data-sortview="hot" title="Heat — combined score of frequency and how overdue it is, vs the top group. Click to sort.">Heat${car('hot')}</span>
                     <span style="width:17px"></span>
                 </div>`;
             // When almost nothing has repeated at this size, every ranking surfaces
@@ -1099,10 +1105,15 @@
             const view = this.smartPickView || (this.smartPickView = 'pattern');
             const size = this.smartPickSize || (this.smartPickSize = 6);
 
+            const tabTips = {
+                pattern: 'Pattern — blends many signals (streaks, gaps, positional bias, frequency, momentum, hot-combo membership) into one score and picks the top numbers.',
+                pairs: 'Pairs — recency-weighted correlation matrix; starts from the strongest number and grows a set that tends to land TOGETHER.',
+                stats: 'Stats — z-score / chi-square: numbers running most significantly ABOVE their expected frequency (statistically over-represented).'
+            };
             const tabs = [['pattern', 'Pattern'], ['pairs', 'Pairs'], ['stats', 'Stats']].map(([v, l]) =>
-                `<button class="vx-gtab ${v === view ? 'on' : ''}" data-spview="${v}">${l}</button>`).join('');
-            const sizes = [4, 5, 6, 7, 8, 9, 10].map(s =>
-                `<button class="vx-gsize ${s === size ? 'on' : ''}" data-spsize="${s}">${s}</button>`).join('');
+                `<button class="vx-gtab ${v === view ? 'on' : ''}" data-spview="${v}" title="${tabTips[v]}">${l}</button>`).join('');
+            const sizeOpts = [4, 5, 6, 7, 8, 9, 10].map(s =>
+                `<option value="${s}" ${s === size ? 'selected' : ''}>${s} numbers</option>`).join('');
 
             const pick = this.smartPick(view, size);
             const stats = pick.length ? this.getComboStats(pick) : null;
@@ -1123,15 +1134,16 @@
             el.innerHTML = `
                 <div class="vx-combos-head"><span class="vx-section-title">Smart picker</span></div>
                 <div class="vx-gtabs">${tabs}</div>
-                <div class="vx-gsizes">${sizes}</div>
-                <div class="vx-sppick">
-                    <div class="vx-spnums">${numsHtml}</div>
+                <div class="vx-spctl">
+                    <select class="vx-spsize" id="overlay-sp-size" title="How many numbers to pick">${sizeOpts}</select>
                     ${pick.length ? `<button class="vx-spapply" id="overlay-sp-apply">Apply</button>` : ''}
                 </div>
+                <div class="vx-spnums">${numsHtml}</div>
                 ${statline}`;
 
             el.querySelectorAll('.vx-gtab').forEach(b => b.onclick = () => { this.smartPickView = b.dataset.spview; this.renderSmartPicker(); });
-            el.querySelectorAll('.vx-gsize').forEach(b => b.onclick = () => { this.smartPickSize = parseInt(b.dataset.spsize, 10); this.renderSmartPicker(); });
+            const sizeSel = el.querySelector('#overlay-sp-size');
+            if (sizeSel) sizeSel.onchange = (e) => { this.smartPickSize = parseInt(e.target.value, 10); this.renderSmartPicker(); };
             const applyBtn = el.querySelector('#overlay-sp-apply');
             if (applyBtn) applyBtn.onclick = () => this.applyCombo(pick);
         }
@@ -2699,14 +2711,25 @@
            }
 
            /* ---- Smart picker ---- */
-           .vx-sppick {
+           .vx-spctl {
                display: flex;
                align-items: center;
+               justify-content: space-between;
                gap: 8px;
-               margin-top: 2px;
+               margin-bottom: 8px;
            }
+           .vx-spsize {
+               background: #10161f;
+               border: 1px solid rgba(255, 255, 255, 0.10);
+               color: #e6edf3;
+               border-radius: 6px;
+               padding: 4px 8px;
+               font-size: 11px;
+               cursor: pointer;
+               outline: none;
+           }
+           .vx-spsize:hover { border-color: rgba(63, 185, 80, 0.45); }
            .vx-spnums {
-               flex: 1;
                display: flex;
                flex-wrap: wrap;
                gap: 4px;
