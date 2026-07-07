@@ -1710,58 +1710,31 @@
             });
         }
 
+        // True swap of two Core-grid tiles (the drawer was removed, so this only
+        // needs the main grid). Persists strategyOrder and re-renders in place.
         swapStrategies(draggedItem, targetItem) {
             const draggedId = draggedItem.dataset.strategyId;
             const targetId = targetItem.dataset.strategyId;
-            const draggedFrom = draggedItem.dataset.source;
-            const targetIn = targetItem.dataset.source;
+            if (!draggedId || !targetId || draggedId === targetId) return;
 
             const mainGrid = this.overlay.querySelector('#overlay-quick-actions');
-            const sideGrid = document.getElementById('overlay-side-actions');
-            if (!mainGrid || !sideGrid) return;
+            if (!mainGrid) return;
 
             const mainIds = Array.from(mainGrid.querySelectorAll('.action-item')).map(i => i.dataset.strategyId);
-            const sideStrategies = Array.from(sideGrid.querySelectorAll('.action-item')).map(i => ({
-                id: i.dataset.strategyId,
-                name: i.querySelector('.action-label')?.textContent || this.getStrategyName(i.dataset.strategyId)
-            }));
-
-            if (draggedFrom === 'side-drawer' && targetIn === 'main-grid') {
-                const di = sideStrategies.findIndex(s => s.id === draggedId);
-                const ti = mainIds.indexOf(targetId);
-                if (di < 0 || ti < 0) return;
-                sideStrategies[di] = { id: targetId, name: this.getStrategyName(targetId) };
-                mainIds[ti] = draggedId;
-            } else if (draggedFrom === 'main-grid' && targetIn === 'side-drawer') {
-                const di = mainIds.indexOf(draggedId);
-                const ti = sideStrategies.findIndex(s => s.id === targetId);
-                if (di < 0 || ti < 0) return;
-                mainIds[di] = targetId;
-                sideStrategies[ti] = { id: draggedId, name: this.getStrategyName(draggedId) };
-            } else if (draggedFrom === 'main-grid' && targetIn === 'main-grid') {
-                const di = mainIds.indexOf(draggedId);
-                const ti = mainIds.indexOf(targetId);
-                if (di < 0 || ti < 0) return;
-                // True swap — exchange the two tiles only (not a reorder that
-                // shifts everything in between).
-                [mainIds[di], mainIds[ti]] = [mainIds[ti], mainIds[di]];
-            } else if (draggedFrom === 'side-drawer' && targetIn === 'side-drawer') {
-                const di = sideStrategies.findIndex(s => s.id === draggedId);
-                const ti = sideStrategies.findIndex(s => s.id === targetId);
-                if (di < 0 || ti < 0) return;
-                // True swap — exchange the two tiles only.
-                [sideStrategies[di], sideStrategies[ti]] = [sideStrategies[ti], sideStrategies[di]];
-            } else {
-                return;
-            }
+            const di = mainIds.indexOf(draggedId);
+            const ti = mainIds.indexOf(targetId);
+            if (di < 0 || ti < 0) return;
+            // Exchange the two tiles only (not a reorder that shifts everything).
+            [mainIds[di], mainIds[ti]] = [mainIds[ti], mainIds[di]];
 
             const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
             const persist = browserAPI?.storage?.local
-                ? browserAPI.storage.local.set({ strategyOrder: mainIds, sideDrawerStrategies: sideStrategies })
+                ? browserAPI.storage.local.set({ strategyOrder: mainIds })
                 : Promise.resolve();
             Promise.resolve(persist).then(() => {
-                this.renderMainGrid(mainIds.map(id => ({ id, name: this.getStrategyName(id) })));
-                this.renderSideDrawer(sideStrategies);
+                // Keep the cached Core portfolio (used by the Core/Alt toggle) in sync.
+                this._mainPortfolio = mainIds.map(id => ({ id, name: this.getStrategyName(id) }));
+                this.renderMainGrid(this._mainPortfolio);
             }).catch(err => console.error('Vantedge: swap persist failed', err));
         }
 
