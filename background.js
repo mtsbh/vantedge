@@ -97,7 +97,7 @@ let lastKenoStrategy = {};
     seedResults: {}, allMultipliers: {}, betsSinceMultiplier: {}, lastOccurrenceMultiplier: {},
     kenoResults: {}, kenoHotNumbers: {}, kenoCorrelations: { 2: {}, 3: {}, 4: {}, 5: {}, 6: {} },
     kenoLastOccurrences: { 2: {}, 3: {}, 4: {}, 5: {}, 6: {} }, kenoLastSeen: { 2: {}, 3: {}, 4: {}, 5: {}, 6: {} },
-    kenoTotalBets: {}, kenoEnhancedState: {}, minesResults: {}, minesHeatmaps: {}, currentMineCount: 3,
+    kenoTotalBets: {}, kenoLifetimeBets: {}, kenoEnhancedState: {}, minesResults: {}, minesHeatmaps: {}, currentMineCount: 3,
     minesAdvancedStats: { totalGames: 0, wins: 0, losses: 0, totalProfit: 0, totalWagered: 0, streaks: { current: { type: null, count: 0 }, longest: { win: 0, loss: 0 } }, patterns: { clusters: [], safeZones: [], hotSpots: [] }, gameHistory: [], gamesByMineCount: {}, currentMineCount: 3 }, legendStats: {}, lastPlayedGame: 'Plinko',
     // NEW: Enhanced prediction tracking
     kenoStrategyPerformance: {}, // Track win rate & multiplier per strategy
@@ -836,7 +836,18 @@ let lastKenoStrategy = {};
     // write + onChanged payload, which is what made long sessions lag.
     if (state.kenoResults[siteKey].length > 1500) state.kenoResults[siteKey].length = 1500;
 
-    state.kenoTotalBets[siteKey] = state.kenoResults[siteKey].length;
+    // Lifetime bet count — independent of the 1500 buffer cap so the visible
+    // counter keeps climbing after the buffer stops growing. The dedup guard
+    // above already returned for repeat ids, so each real bet counts once.
+    if (state.kenoLifetimeBets[siteKey] == null) {
+      // First bet since this feature landed: seed from the buffer so existing
+      // sessions don't reset to 1 (best available lower bound — true history
+      // before now was never stored).
+      state.kenoLifetimeBets[siteKey] = state.kenoResults[siteKey].length;
+    } else {
+      state.kenoLifetimeBets[siteKey]++;
+    }
+    state.kenoTotalBets[siteKey] = state.kenoLifetimeBets[siteKey];
 
     if (!state.kenoHotNumbers[siteKey]) state.kenoHotNumbers[siteKey] = new Array(40).fill(0);
     betData.state.drawnNumbers.forEach(num => {
@@ -1553,6 +1564,7 @@ let lastKenoStrategy = {};
     if (!state.kenoResults) state.kenoResults = {};
     if (!state.kenoHotNumbers) state.kenoHotNumbers = {};
     if (!state.kenoTotalBets) state.kenoTotalBets = {};
+    if (!state.kenoLifetimeBets) state.kenoLifetimeBets = {};
     if (!state.kenoCorrelations) state.kenoCorrelations = {};
     if (!state.kenoLastOccurrences) state.kenoLastOccurrences = {};
     if (!state.kenoLastSeen) state.kenoLastSeen = {};
@@ -1563,6 +1575,7 @@ let lastKenoStrategy = {};
     state.kenoResults[kenoKey] = [];
     state.kenoHotNumbers[kenoKey] = new Array(40).fill(0);
     state.kenoTotalBets[kenoKey] = 0;
+    state.kenoLifetimeBets[kenoKey] = 0;
     delete state.kenoCorrelations[kenoKey];
     delete state.kenoLastOccurrences[kenoKey];
     delete state.kenoLastSeen[kenoKey];

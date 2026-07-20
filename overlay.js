@@ -375,6 +375,10 @@
 
             // Reset stats — reuse existing arrays/objects to avoid GC pressure on every draw.
             this.data.kenoStats.totalBets = siteSpecificResults.length;
+            // Window actually analyzed (≤ MAX_ANALYSIS). Anything comparing the
+            // windowed counts against an expectation MUST use this, not totalBets —
+            // mixing them made Hot/Cold saturate once bets passed the window size.
+            this.data.kenoStats.analyzedGames = numGames;
             const hotNumbers = this.data.kenoStats.hotNumbers;
             const perNumberStats = this.data.kenoStats.perNumberStats;
             for (let i = 0; i < N; i++) {
@@ -591,7 +595,12 @@
             const counts = this.data.kenoStats.hotNumbers;
             const bets = this.data.kenoStats.totalBets;
             if (!bets) return { hot: 0, cold: 0, expected: 0 };
-            const expected = bets * ((this._drawnPerGame || 10) / N);
+            // Expected draws per number over the SAME window the counts were
+            // built from (last ≤1000 games) — using totalBets here inflated
+            // expected past what windowed counts can reach, pinning Hot at 0
+            // and saturating Cold once a session passed 1000 bets.
+            const windowGames = this.data.kenoStats.analyzedGames || Math.min(bets, 1000);
+            const expected = windowGames * ((this._drawnPerGame || 10) / N);
             let hot = 0, cold = 0;
             for (let i = 0; i < N; i++) {
                 if (counts[i] > expected * 1.15) hot++;
@@ -624,11 +633,17 @@
             const hasPaid = (this._paidBetCount || 0) > 0;
             const plCls = pl > 0.05 ? 'hot' : (pl < -0.05 ? 'plneg' : '');
             const exp = expected ? Math.round(expected) : 0;
+            // Realized RTP: average multiplier per paid bet. The honest scoreboard —
+            // 1.00x is break-even; sustained above 1.0 over thousands of bets would
+            // be a real edge, below is the house edge doing its job.
+            const rtp = hasPaid ? (pl / this._paidBetCount) + 1 : 0;
+            const rtpCls = rtp > 1.005 ? 'hot' : (rtp < 0.995 ? 'plneg' : '');
             const tip = {
-                bets: 'Settled bets tracked on this seed.',
-                hot: `Numbers drawn 15%+ ABOVE expected (~${exp}× each so far). How many are running hot.`,
-                cold: `Numbers drawn 15%+ BELOW expected (~${exp}× each so far). How many are running cold.`,
-                pl: 'Net units on real-money bets: sum of (multiplier − 1). Free ($0) bets are excluded.'
+                bets: 'Settled bets tracked on this site.',
+                hot: `Numbers drawn 15%+ ABOVE expected (~${exp}× each) over the last ${(this.data.kenoStats.analyzedGames || 0).toLocaleString()} games. How many are running hot.`,
+                cold: `Numbers drawn 15%+ BELOW expected (~${exp}× each) over the last ${(this.data.kenoStats.analyzedGames || 0).toLocaleString()} games. How many are running cold.`,
+                pl: 'Net units on real-money bets: sum of (multiplier − 1). Free ($0) bets are excluded.',
+                rtp: `Realized RTP: average multiplier per paid bet over ${(this._paidBetCount || 0).toLocaleString()} tracked paid bets. 1.00x = break-even.`
             };
             const tile = (label, value, cls = '', title = '') =>
                 `<div class="vx-stat" title="${title}"><span class="vx-stat-k">${label}</span><span class="vx-stat-v ${cls}">${value}</span></div>`;
@@ -637,7 +652,8 @@
                 tile('Hot', bets ? hot : '—', 'hot', tip.hot) +
                 tile('Cold', bets ? cold : '—', 'cold', tip.cold) +
                 // Only real-money bets have P/L; free ($0) play shows "—".
-                tile('P/L', hasPaid ? this.plFmt(pl) : '—', hasPaid ? plCls : '', tip.pl);
+                tile('P/L', hasPaid ? this.plFmt(pl) : '—', hasPaid ? plCls : '', tip.pl) +
+                tile('RTP', hasPaid ? rtp.toFixed(2) + 'x' : '—', hasPaid ? rtpCls : '', tip.rtp);
         }
 
         // Top co-occurring number trios from recent draws. Strength is each trio's
@@ -853,6 +869,13 @@
         }
 
         _hotGroupsShell(sizePills, tabs, favOnly) {
+            // Honest yardstick for the gap colors: how often a group of this size
+            // fully hits by pure chance (hypergeometric). "Overdue" = past 1.5x this.
+            const size = this.hotGroupSize || 4;
+            const exp = this.expectedGroupGap(size);
+            const expHint = isFinite(exp)
+                ? `<div class="vx-gexp" title="A ${size}-number group fully hits about once per ${Math.round(exp).toLocaleString()} draws by pure chance. Gap colors compare each group's current gap to this: yellow from 0.8x, amber glow past 1.5x.">${size}-groups hit ~1 in ${Math.round(exp).toLocaleString()} draws</div>`
+                : '';
             return `
                 <div class="vx-combos-head">
                     <span class="vx-section-title">Hot groups</span>
@@ -861,7 +884,7 @@
                     </button>
                 </div>
                 <div class="vx-gsizes">${sizePills}</div>
-                <div class="vx-gtabs">${tabs}</div>`;
+                <div class="vx-gtabs">${tabs}</div>${expHint}`;
         }
 
         wireHotCombos() {
@@ -912,11 +935,13 @@
                 if (nums.length < 2) continue;
                 const key = nums.join('-');
                 let m = map[key];
-                if (!m) m = map[key] = { key, numbers: nums, plays: 0, paid: 0, sumMult: 0, best: 0, pl: 0, firstSeen: i, lastSeen: i };
+                if (!m) m = map[key] = { key, numbers: nums, plays: 0, paid: 0, sumMult: 0, best: 0, bestCount: 0, pl: 0, firstSeen: i, lastSeen: i };
                 m.plays++;
                 const mult = Number(b.payoutMultiplier) || 0;
                 const amt = Number(b.amount) || 0;
-                if (mult > m.best) m.best = mult;
+                // bestCount: how many times the best payout landed (259x² notation).
+                if (mult > m.best) { m.best = mult; m.bestCount = 1; }
+                else if (mult > 0 && mult === m.best) m.bestCount++;
                 if (amt > 0) { m.paid++; m.sumMult += mult; m.pl += (mult - 1); }
                 if (i < m.firstSeen) m.firstSeen = i;
                 if (i > m.lastSeen) m.lastSeen = i;
@@ -987,7 +1012,7 @@
             let combos = Object.values(map);
             if (!combos.length) {
                 el.innerHTML = `<div class="vx-combos-head"><span class="vx-section-title">Combo history</span></div>
-                    <div class="vx-combos-empty">No combos played yet on this seed.</div>`;
+                    <div class="vx-combos-empty">No combos played yet on this site.</div>`;
                 return;
             }
             // Most recently played first, cap to 8.
@@ -997,12 +1022,23 @@
                 const g = this.comboGap(m.numbers);
                 const gapText = g.gap == null ? '—' : (g.gap === 0 ? 'NOW' : g.gap);
                 const plCls = m.pl > 0.05 ? 'pos' : (m.pl < -0.05 ? 'neg' : '');
+                // Same color language as Hot Groups: gap vs hypergeometric expected
+                // interval for this pick size. Green=just hit, yellow=approaching,
+                // amber glow=stretched past 1.5x expected.
+                const expGap = this.expectedGroupGap(m.numbers.length);
+                const ratio = (g.gap != null && isFinite(expGap) && expGap > 0) ? g.gap / expGap : 0;
+                const gapState = (g.gap === 0) ? 'now' : (ratio >= 1.5) ? 'overdue' : (ratio >= 0.8) ? 'due' : '';
+                const gapTip = isFinite(expGap)
+                    ? `${g.hits} full hit${g.hits === 1 ? '' : 's'} in window · a ${m.numbers.length}-pick fully hits ~1 in ${Math.round(expGap).toLocaleString()} draws by chance`
+                    : '';
+                const gapSup = g.hits > 0 ? `<sup>${g.hits}</sup>` : '';
+                const bestSup = m.bestCount > 1 ? `<sup>${m.bestCount}</sup>` : '';
                 return `<div class="vx-chrow" data-combo-numbers="${m.numbers.join(',')}">
                             <div class="vx-chtop">
                                 <span class="vx-gnums">${m.numbers.join('-')}</span>
                                 <span class="vx-chpl ${plCls}">${this.plFmt(m.pl)}</span>
                             </div>
-                            <div class="vx-chsub">best <span class="vx-chbest" title="Top multipliers — click to expand">${m.best.toFixed(1)}x</span> · avg ${m.avg.toFixed(1)}x · ${m.plays} plays · gap ${gapText}</div>
+                            <div class="vx-chsub">best <span class="vx-chbest" title="Top multipliers — click to expand${m.bestCount > 1 ? ` (best landed ${m.bestCount}×)` : ''}">${m.best.toFixed(1)}x${bestSup}</span> · avg ${m.avg.toFixed(1)}x · ${m.plays} plays · gap <span class="vx-chgap ${gapState}" title="${gapTip}">${gapText}${gapSup}</span></div>
                             <div class="vx-chdetail" hidden></div>
                         </div>`;
             }).join('');
@@ -2655,6 +2691,17 @@
            .vx-gcell.gap.now { color: #3fb950; }
            .vx-gcell.gap.due { color: #d6a700; }
            .vx-gcell.gap.overdue { color: #e0913a; font-weight: 600; text-shadow: 0 0 6px rgba(224, 145, 58, 0.85); }
+           /* Combo History gap uses the same states as Hot Groups gap */
+           .vx-chgap.now { color: #3fb950; }
+           .vx-chgap.due { color: #d6a700; }
+           .vx-chgap.overdue { color: #e0913a; font-weight: 600; text-shadow: 0 0 6px rgba(224, 145, 58, 0.85); }
+           .vx-chsub sup, .vx-chmx sup { font-size: 8px; opacity: 0.75; }
+           .vx-gexp {
+               font-size: 9px;
+               color: #6e7681;
+               text-align: right;
+               padding: 2px 2px 0;
+           }
            .vx-gtrend { display: inline-flex; vertical-align: middle; margin-right: 3px; }
            .vx-gtrend:empty { display: none; }
            .vx-combo-star {
@@ -3251,7 +3298,7 @@
                 const cached = this.heatmapCells[i];
 
                 cached.countSpan.textContent = occurrences;
-                cached.cell.title = `#${i + 1} · heat ${heatScores[i + 1]}/100 · drawn ${occurrences}×`;
+                cached.cell.title = `#${i + 1} · heat ${heatScores[i + 1]}/100 · drawn ${occurrences}× in last 1000`;
 
                 if (cached.momSlot) {
                     const state = this._momentum ? this._momentum[i + 1] : 'flat';
