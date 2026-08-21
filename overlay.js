@@ -102,6 +102,9 @@
             this.gameMode = 'keno';
             this.minesCount = null;
             this._minesGames = [];
+            // Storage listeners get removed on teardown — the site can route in
+            // and out of a game many times in one page load.
+            this._storageListeners = [];
             // Bump when the curated main/drawer strategy set changes so a stale saved
             // strategyOrder/sideDrawerStrategies is reset to the new defaults once.
             this.LAYOUT_VERSION = 3;
@@ -316,6 +319,13 @@
             return /mines/i.test(location.pathname) ? 'mines' : 'keno';
         }
 
+        // Route moved to a different supported game while we were already up.
+        applyRouteGame(game) {
+            if (!game || game === this.gameMode) return;
+            this.gameMode = game;
+            this.mountMode();
+        }
+
         // Build the body for the active game and start its data flow. Called on
         // init and again if the site navigates between keno and mines in place.
         mountMode() {
@@ -391,6 +401,7 @@
 
                 if (!this.storageListenerAdded) {
                     browserAPI.storage.onChanged.addListener(debouncedListener);
+                    this._storageListeners.push(debouncedListener);
                     this.storageListenerAdded = true;
                 }
             }
@@ -1363,6 +1374,7 @@
                 }
             }, 400);
             browserAPI.storage.onChanged.addListener(debounced);
+            this._storageListeners.push(debounced);
             this.minesListenerAdded = true;
         }
 
@@ -3866,21 +3878,16 @@
                 const url = location.href;
                 if (url !== lastURL) {
                     lastURL = url;
-                    // Sites route between games without reloading, so follow the
-                    // page into the other game rather than showing a stale body.
-                    const mode = this.detectGameMode();
-                    if (mode !== this.gameMode) {
-                        this.gameMode = mode;
-                        this.mountMode();
-                        return;
-                    }
+                    // Game swaps are handled by the route watcher at the bottom of
+                    // this file; here we only refresh keno's board detection.
                     if (url.includes('keno')) {
                         this.cachedButtons = null;
                         this.detectKeno();
                     }
                 }
             }, 1000);
-            new MutationObserver(debouncedUrlCheck).observe(document, { subtree: true, childList: true });
+            this.mutationObserver = new MutationObserver(debouncedUrlCheck);
+            this.mutationObserver.observe(document, { subtree: true, childList: true });
         }
 
 
@@ -6254,6 +6261,17 @@
             safe(() => {
                 // Release the page-push so the host page reclaims the reserved gap.
                 this.pushPageForSidebar(false);
+                clearInterval(this._modePollHandle);
+                clearInterval(this._kenoDetectHandle);
+                this.mutationObserver?.disconnect();
+                const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
+                this._storageListeners.forEach(fn => {
+                    safe(() => browserAPI?.storage?.onChanged?.removeListener(fn));
+                });
+                this._storageListeners = [];
+                this.storageListenerAdded = false;
+                this.minesListenerAdded = false;
+                document.querySelectorAll('.vx-board-pick').forEach(el => el.classList.remove('vx-board-pick'));
                 if (this.overlay) {
                     this.overlay.remove();
                 }
@@ -6264,12 +6282,19 @@
         }
     }
 
+    // Which game the current URL is, or null for the rest of the site.
+    function routeGame() {
+        const path = location.pathname;
+        if (/mines/i.test(path)) return 'mines';
+        if (/keno/i.test(path)) return 'keno';
+        return null;
+    }
+
     function initializeOverlay() {
-        if (window.geminyzerOverlay) {
-            return;
-        }
+        if (window.geminyzerOverlay || !routeGame()) return;
         safe(() => {
             const overlay = new GeminyzerOverlay();
+            console.log(`✅ Vantedge overlay mounted (${overlay.gameMode})`);
             document.addEventListener('keydown', (e) => {
                 if (e.ctrlKey && e.shiftKey && e.key === 'G') {
                     e.preventDefault();
@@ -6279,10 +6304,38 @@
         });
     }
 
+    // These sites are single-page apps: opening Mines from the lobby swaps the
+    // route without loading a document, so nothing new is ever injected. The
+    // script therefore loads across the site and mounts itself when the route
+    // becomes a game it supports — and tears down when you leave. Polling the
+    // URL beats hooking pushState/replaceState/popstate, which every framework
+    // and every in-app link would otherwise have to cooperate with.
+    let lastRoute = null;
+    function checkRoute() {
+        const game = routeGame();
+        if (game === lastRoute) return;
+        lastRoute = game;
+        if (game) {
+            if (window.geminyzerOverlay) {
+                // Already up (keno ↔ mines in place) — swap the body instead.
+                safe(() => window.geminyzerOverlay.applyRouteGame(game));
+            } else {
+                initializeOverlay();
+            }
+        } else if (window.geminyzerOverlay) {
+            safe(() => window.geminyzerOverlay.destroy());
+        }
+    }
+
+    function startRouteWatch() {
+        checkRoute();
+        setInterval(checkRoute, 1000);
+    }
+
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initializeOverlay);
+        document.addEventListener('DOMContentLoaded', () => setTimeout(startRouteWatch, 800));
     } else {
-        setTimeout(initializeOverlay, 1000);
+        setTimeout(startRouteWatch, 800);
     }
 })();
 
