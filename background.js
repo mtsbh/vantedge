@@ -533,6 +533,10 @@ let lastKenoStrategy = {};
   // repopulates the heatmaps / advanced stats / predictions the popup reads.
   // Growth is capped and there is no per-tick work (only completed rounds).
   // =================================================================
+  // Finished mines rounds kept per site — deep enough for the overlay's
+  // heatmap to mean something without bloating storage (~350 bytes a round).
+  const MINES_HISTORY_LIMIT = 500;
+
   function ensureMinesStatsShape() {
     const s = state.minesAdvancedStats || (state.minesAdvancedStats = {});
     if (typeof s.totalGames !== 'number') s.totalGames = 0;
@@ -561,8 +565,11 @@ let lastKenoStrategy = {};
     state.currentMineCount = mineCount;
 
     state.minesResults[siteKey].unshift(betData);
-    if (state.minesResults[siteKey].length > 100) {
-      state.minesResults[siteKey] = state.minesResults[siteKey].slice(0, 100);
+    // The overlay's heatmap, clusters and combo history all read this window,
+    // so keep a session's worth of rounds. The emergency cleanup below still
+    // cuts it back to 100 if storage ever runs tight.
+    if (state.minesResults[siteKey].length > MINES_HISTORY_LIMIT) {
+      state.minesResults[siteKey] = state.minesResults[siteKey].slice(0, MINES_HISTORY_LIMIT);
     }
 
     updateMinesAdvancedStats(betData, betData.payoutMultiplier > 0);
