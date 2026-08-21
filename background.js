@@ -117,12 +117,74 @@ let lastKenoStrategy = {};
     try {
       const result = await browser.storage.local.get(null);
       state = { ...state, ...result };
+      migrateWinnaOrigins();
       return true;
     } catch (error) {
       console.error('Failed to load state from storage:', error);
       return false;
     }
   })();
+
+  // Winna moved the keno board off the games.winna.com iframe and onto
+  // winna.com/game/originals/keno, so bets were captured under whichever origin
+  // the frame happened to have while the overlay only ever reads
+  // games.winna.com. injected.js now canonicalises the origin, but sessions
+  // recorded before that fix are stranded under the old keys — merge them in.
+  //
+  // Additive only: nothing is deleted, and bets already under the canonical key
+  // win, so running this more than once is a no-op.
+  function migrateWinnaOrigins() {
+    const CANON = 'https://games.winna.com';
+    // 'null' is the opaque origin of Winna's sandboxed game frame — bets landed
+    // there while site was derived from window.location.origin.
+    const LEGACY = ['https://winna.com', 'https://originals.winna.com', 'null'];
+    const canonKey = `${CANON}-keno-session`;
+    let merged = 0;
+
+    LEGACY.forEach(origin => {
+      const legacyKey = `${origin}-keno-session`;
+      const legacy = state.kenoResults?.[legacyKey];
+      if (!Array.isArray(legacy) || legacy.length === 0) return;
+
+      if (!state.kenoResults) state.kenoResults = {};
+      const canon = state.kenoResults[canonKey] || [];
+      const seen = new Set(canon.map(b => b?.id));
+      const additions = legacy.filter(b => b && !seen.has(b.id));
+      if (additions.length === 0) return;
+
+      // kenoResults is newest-first; bets carry an ISO timestamp, so re-sort the
+      // union rather than assuming the two ranges don't interleave.
+      state.kenoResults[canonKey] = canon.concat(additions).sort(
+        (a, b) => new Date(b?.timestamp || 0) - new Date(a?.timestamp || 0)
+      );
+      if (state.kenoResults[canonKey].length > 1500) state.kenoResults[canonKey].length = 1500;
+
+      if (!state.kenoLifetimeBets) state.kenoLifetimeBets = {};
+      if (!state.kenoTotalBets) state.kenoTotalBets = {};
+      const legacyLifetime = state.kenoLifetimeBets[legacyKey] || legacy.length;
+      state.kenoLifetimeBets[canonKey] = (state.kenoLifetimeBets[canonKey] || 0) + legacyLifetime;
+      state.kenoTotalBets[canonKey] = state.kenoLifetimeBets[canonKey];
+
+      merged += additions.length;
+    });
+
+    if (merged > 0) {
+      // Hot numbers are derived; rebuild from the merged buffer so they can't
+      // disagree with it.
+      if (!state.kenoHotNumbers) state.kenoHotNumbers = {};
+      const counts = new Array(40).fill(0);
+      (state.kenoResults[canonKey] || []).forEach(bet => {
+        (bet?.state?.drawnNumbers || []).forEach(num => {
+          const n = parseInt(num, 10);
+          if (n >= 1 && n <= 40) counts[n - 1]++;
+        });
+      });
+      state.kenoHotNumbers[canonKey] = counts;
+
+      console.log(`♻️ Vantedge: merged ${merged} Winna bet(s) from legacy origins into ${canonKey}`);
+      saveToStorage();
+    }
+  }
 
   // Initialize sophisticated storage manager for persistent legend stats
   (async () => {
