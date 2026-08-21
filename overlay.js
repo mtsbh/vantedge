@@ -14,62 +14,10 @@
         }
     }
 
-    // --- Money helpers -------------------------------------------------------
-    // P/L is real money, so every display goes through here. Display precision
-    // is per currency: fiat + stablecoins to cents, crypto to the precision the
-    // casinos themselves show. Unknown tickers fall back on magnitude.
-    const CURRENCY_DECIMALS = {
-        usd: 2, usdt: 2, usdc: 2, dai: 2, busd: 2, tusd: 2, eur: 2, gbp: 2,
-        cad: 2, aud: 2, brl: 2, mxn: 2, ars: 2, pen: 2, inr: 2, try: 2,
-        jpy: 0, clp: 0, doge: 2, trx: 2, xrp: 4, sol: 4, ada: 4, matic: 4,
-        bnb: 6, eth: 6, ltc: 6, bch: 6, btc: 8
-    };
-    const CURRENCY_SYMBOLS = {
-        usd: '$', usdt: '$', usdc: '$', dai: '$', busd: '$', tusd: '$',
-        eur: '\u20ac', gbp: '\u00a3', jpy: '\u00a5', brl: 'R$', cad: 'C$', aud: 'A$'
-    };
-
-    function curKey(cur) { return String(cur || 'usd').toLowerCase(); }
-
-    // Decimals to render `cur` with. `mag` (the largest value in play) only
-    // matters for tickers that aren't in the table.
-    function curDecimals(cur, mag = 0) {
-        const d = CURRENCY_DECIMALS[curKey(cur)];
-        if (d != null) return d;
-        return Math.abs(mag) >= 1 ? 2 : 8;
-    }
-
-    // Half a display step: anything smaller rounds to zero, so it's neither a
-    // win nor a loss as far as the colouring is concerned.
-    function curEpsilon(cur, mag = 0) {
-        return Math.pow(10, -curDecimals(cur, mag)) / 2;
-    }
-
-    // "+$4.00", "-0.000012 BTC", or "+$1.2k" when compact and large. Crypto
-    // keeps its trailing zeros trimmed so 0.00001200 reads as 0.000012.
-    function fmtMoney(v, cur = 'usd', { signed = true, compact = false } = {}) {
-        const c = curKey(cur);
-        const val = Number(v) || 0;
-        const sym = CURRENCY_SYMBOLS[c];
-        const neg = val < 0;
-        const abs = Math.abs(val);
-        let n;
-        if (compact && abs >= 10000) {
-            const units = [[1e9, 'B'], [1e6, 'M'], [1e3, 'k']];
-            const [div, suf] = units.find(([d]) => abs >= d);
-            n = (abs / div).toFixed(abs / div >= 100 ? 0 : 1).replace(/\.0$/, '') + suf;
-        } else {
-            n = abs.toFixed(curDecimals(c, abs));
-            if (n.indexOf('.') !== -1 && curDecimals(c, abs) > 2) {
-                n = n.replace(/0+$/, '').replace(/\.$/, ''); // trim crypto zeros
-            }
-            const parts = n.split('.');
-            parts[0] = Number(parts[0]).toLocaleString('en-US');
-            n = parts.join('.');
-        }
-        const body = sym ? `${sym}${n}` : `${n} ${c.toUpperCase()}`;
-        return (neg ? '-' : (signed && val > 0 ? '+' : '')) + body;
-    }
+    // Money math + formatting live in money.js (loaded just ahead of this file
+    // by the manifest) so the overlay, popup and service worker all count P/L
+    // the same way.
+    const { curKey, curEpsilon, fmtMoney, betProfit } = self.VantedgeMoney;
 
     class GeminyzerOverlay {
         constructor() {
@@ -657,38 +605,13 @@
             return { hot, cold, expected };
         }
 
-        // Session P/L in real money: Σ stake × (multiplier − 1) over paid keno bets
-        // (free $0 bets excluded). Stake-weighted, so a $2 bet that loses is
-        // −$2 and a $2 bet paying 3x is +$4 — not ±1 unit each. Multiplier ×
-        // amount rather than the recorded payout because some sites store profit
-        // in `payout` and others store the gross return.
-        //
-        // Currencies are kept apart (we never invent an exchange rate): the
-        // currency with the most paid bets is the headline, the rest come back
-        // in `others` for the tooltip.
+        // Session P/L in real money, stake-weighted: a $2 loss is −$2 and a $2
+        // bet paying 3x is +$4, not ±1 unit each. Free ($0) bets are excluded and
+        // currencies are kept apart — see money.js.
         sessionPL() {
-            const all = this._validBets || []; // validated, settled bets only
-            const by = Object.create(null);
-            let paid = 0;
-            for (let i = 0; i < all.length; i++) {
-                const b = all[i];
-                const amt = Number(b?.amount) || 0;
-                if (!(amt > 0)) continue; // free/$0 bets excluded
-                const mult = Number(b?.payoutMultiplier) || 0;
-                const cur = curKey(b?.currency);
-                const e = by[cur] || (by[cur] = { cur, pl: 0, wagered: 0, bets: 0 });
-                e.pl += amt * (mult - 1);
-                e.wagered += amt;
-                e.bets++;
-                paid++;
-            }
-            const list = Object.values(by).sort((a, b) => b.bets - a.bets || b.wagered - a.wagered);
-            const main = list[0] || { cur: 'usd', pl: 0, wagered: 0, bets: 0 };
-            this._paidBetCount = paid;
-            return {
-                pl: main.pl, wagered: main.wagered, cur: main.cur, bets: main.bets,
-                others: list.slice(1), paid
-            };
+            const stats = VantedgeMoney.summarize(this._validBets || []); // settled bets only
+            this._paidBetCount = stats.paid;
+            return stats;
         }
 
         updateStatusStrip() {
@@ -701,7 +624,7 @@
             const eps = curEpsilon(plStat.cur, plStat.pl);
             const plCls = plStat.pl > eps ? 'hot' : (plStat.pl < -eps ? 'plneg' : '');
             const exp = expected ? Math.round(expected) : 0;
-            const roi = plStat.wagered > 0 ? (plStat.pl / plStat.wagered) * 100 : 0;
+            const roi = plStat.roi;
             const others = plStat.others.length
                 ? ` Also ${plStat.others.map(o => fmtMoney(o.pl, o.cur)).join(', ')} (kept separate — no conversion).`
                 : '';
@@ -1009,7 +932,7 @@
                 if (amt > 0) {
                     m.paid++;
                     m.sumMult += mult;
-                    m.pl += amt * (mult - 1);
+                    m.pl += betProfit(b);
                     m.wagered += amt;
                     const cur = curKey(b.currency);
                     if (m.cur === null) m.cur = cur;

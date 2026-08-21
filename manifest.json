@@ -43,7 +43,7 @@
   ],
   "background": {
     "service_worker": "background.js",
-    "scripts": ["storage-manager.js", "cloud-sync.js", "background.js"]
+    "scripts": ["money.js", "storage-manager.js", "cloud-sync.js", "background.js"]
   },
   "action": {
     "default_popup": "/popup/popup.html",
@@ -96,7 +96,7 @@
         "https://acebet.com/crypto-casino/originals/keno*",
         "https://acebet.co/crypto-casino/originals/keno*"
       ],
-      "js": ["overlay.js"],
+      "js": ["money.js", "overlay.js"],
       "css": [],
       "run_at": "document_idle",
       "all_frames": false
