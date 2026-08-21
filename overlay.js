@@ -19,6 +19,52 @@
     // the same way.
     const { curKey, curEpsilon, fmtMoney, betProfit } = self.VantedgeMoney;
 
+    // Shared heat palette for both grids (keno numbers, mines tiles): neutral
+    // gray at the expected rate, brown fill + amber edge above it, steel fill +
+    // blue edge below. `ratio` is observed/expected; maxAbove/maxBelow are the
+    // observed spread either side of 1, so the tint scales to the data instead
+    // of washing out once counts converge.
+    const HEAT = {
+        top: [47, 56, 69], bot: [36, 44, 56], border: [72, 80, 94],
+        hotFill: [112, 74, 38], hotEdge: [206, 138, 60],
+        coldFill: [40, 80, 116], coldEdge: [72, 144, 198]
+    };
+    function heatStyle(ratio, maxAbove, maxBelow) {
+        let fillTgt, edgeTgt, t;
+        if (ratio >= 1) {
+            t = maxAbove > 0 ? Math.min((ratio - 1) / maxAbove, 1) : 0;
+            fillTgt = HEAT.hotFill; edgeTgt = HEAT.hotEdge;
+        } else {
+            t = maxBelow > 0 ? Math.min((1 - ratio) / maxBelow, 1) : 0;
+            fillTgt = HEAT.coldFill; edgeTgt = HEAT.coldEdge;
+        }
+        const mix = (a, b) => Math.round(a + (b - a) * t);
+        const rgb = (base, tgt) => `rgb(${mix(base[0], tgt[0])}, ${mix(base[1], tgt[1])}, ${mix(base[2], tgt[2])})`;
+        return {
+            background: `linear-gradient(180deg, ${rgb(HEAT.top, fillTgt)}, ${rgb(HEAT.bot, fillTgt)})`,
+            borderColor: rgb(HEAT.border, edgeTgt),
+            color: '#eef3f8'
+        };
+    }
+    // What an untouched cell looks like before any history exists.
+    const HEAT_EMPTY = {
+        background: 'linear-gradient(180deg, rgb(47,56,69), rgb(36,44,56))',
+        borderColor: 'rgba(255,255,255,0.05)',
+        color: '#8b949e'
+    };
+    // Spread of ratios either side of 1, for scaling the tint.
+    function heatSpread(counts, expected) {
+        let maxAbove = 0, maxBelow = 0;
+        if (expected > 0) {
+            for (let i = 0; i < counts.length; i++) {
+                const r = counts[i] / expected;
+                if (r > 1) { if (r - 1 > maxAbove) maxAbove = r - 1; }
+                else if (1 - r > maxBelow) maxBelow = 1 - r;
+            }
+        }
+        return { maxAbove, maxBelow };
+    }
+
     class GeminyzerOverlay {
         constructor() {
             this.isVisible = true;
@@ -51,6 +97,11 @@
             // Strategy grid view: 'main' (core 16) or 'alt' (alternative set).
             this.strategyView = 'main';
             this._momentum = null;
+            // Mines mode: which mine count the board is filtered to, and the
+            // finished rounds behind it (see the "Mines mode" section below).
+            this.gameMode = 'keno';
+            this.minesCount = null;
+            this._minesGames = [];
             // Bump when the curated main/drawer strategy set changes so a stale saved
             // strategyOrder/sideDrawerStrategies is reset to the new defaults once.
             this.LAYOUT_VERSION = 3;
@@ -248,22 +299,47 @@
         }
 
         initialize() {
+            this.gameMode = this.detectGameMode();
             this.createOverlay();
             this.loadOverlayPosition(); // Load saved position after overlay is created
-            this.setupQuickActions();
             this.addStyles();
             this.attachEventListeners();
+            this.setupGlobalReference();
+            this.setupUrlWatcher();
+            this.loadLayoutMode();
+            this.mountMode();
+        }
+
+        // Which game this page is: the manifest only injects the overlay on keno
+        // and mines pages, so the path tells us which body to build.
+        detectGameMode() {
+            return /mines/i.test(location.pathname) ? 'mines' : 'keno';
+        }
+
+        // Build the body for the active game and start its data flow. Called on
+        // init and again if the site navigates between keno and mines in place.
+        mountMode() {
+            const content = this.overlay?.querySelector('#overlay-content');
+            if (!content) return;
+            const mines = this.gameMode === 'mines';
+            content.innerHTML = mines ? this.minesMarkup() : this.kenoMarkup();
+            this.overlay.classList.toggle('vx-mines-mode', mines);
+            const label = this.overlay.querySelector('#overlay-stats-label');
+            if (label) label.textContent = mines ? 'games' : 'bets';
+            if (mines) this.initMinesMode(); else this.initKenoMode();
+        }
+
+        initKenoMode() {
+            this.heatmapCells.length = 0; // fresh grid nodes after a remount
+            this.setupQuickActions();
             this.populateHeatmap();
             this.updateUI();
             this.updateAIRecommendation(); // Update AI recommendation on init
             this.loadDataFromStorage();
             this.setupStorageListener();
-            this.setupGlobalReference();
-            this.setupUrlWatcher();
             this.loadActiveButton();
             this.detectKeno();
             this.loadSideDrawerState();
-            this.loadLayoutMode();
             this.setupModePoll();
 
             setTimeout(() => {
@@ -638,14 +714,12 @@
                       + `ROI ${roi > 0 ? '+' : ''}${roi.toFixed(1)}%.${others} Free ($0) bets are excluded.`
                     : 'Net profit on real-money bets: stake × (multiplier − 1), summed. Free ($0) bets are excluded.'
             };
-            const tile = (label, value, cls = '', title = '') =>
-                `<div class="vx-stat" title="${title}"><span class="vx-stat-k">${label}</span><span class="vx-stat-v ${cls}">${value}</span></div>`;
             el.innerHTML =
-                tile('Bets', bets.toLocaleString(), '', tip.bets) +
-                tile('Hot', bets ? hot : '—', 'hot', tip.hot) +
-                tile('Cold', bets ? cold : '—', 'cold', tip.cold) +
+                this.statTile('Bets', bets.toLocaleString(), '', tip.bets) +
+                this.statTile('Hot', bets ? hot : '—', 'hot', tip.hot) +
+                this.statTile('Cold', bets ? cold : '—', 'cold', tip.cold) +
                 // Only real-money bets have P/L; free ($0) play shows "—".
-                tile('P/L', hasPaid ? fmtMoney(plStat.pl, plStat.cur, { compact: true }) : '—', hasPaid ? plCls : '', tip.pl);
+                this.statTile('P/L', hasPaid ? fmtMoney(plStat.pl, plStat.cur, { compact: true }) : '—', hasPaid ? plCls : '', tip.pl);
         }
 
         // Top co-occurring number trios from recent draws. Strength is each trio's
@@ -1226,7 +1300,7 @@
                     <span class="overlay-name">VantEdge</span>
                     <span class="overlay-pro">PRO</span>
                     <span class="overlay-stats">
-                        <span id="overlay-total-bets">0</span> bets
+                        <span id="overlay-total-bets">0</span> <span id="overlay-stats-label">bets</span>
                         <span id="enhancement-status" class="enhancement-status" title="Enhancement Status">⚡</span>
                     </span>
                 </div>
@@ -1237,7 +1311,268 @@
                     <button id="overlay-toggle" title="Hide">${this.ctlIcon('x')}</button>
                 </div>
             </div>
-            <div class="overlay-content" id="overlay-content">
+            <div class="overlay-content" id="overlay-content"></div>`;
+            safe(() => document.body.appendChild(this.overlay));
+
+            // The old slide-out "Alternative" drawer + its ▶ tab were removed in
+            // favour of the in-grid Core/Alternative toggle. All drawer methods
+            // (positionSideDrawer/toggleSideDrawer/etc.) null-guard, so leaving them
+            // is harmless; we simply no longer create the DOM.
+        }
+
+        // ===================== Mines mode ==================================
+        // Mines rounds are captured by injected.js and stored by the service
+        // worker under `minesResults[origin]` (finished rounds only — those are
+        // the ones that reveal the whole layout). The panel reads that history
+        // straight from storage, the same way the keno body reads kenoResults.
+
+        initMinesMode() {
+            this.loadMinesFromStorage();
+            this.setupMinesStorageListener();
+        }
+
+        loadMinesFromStorage() {
+            const browserAPI = (typeof browser !== 'undefined' && browser?.storage) ? browser :
+                (typeof chrome !== 'undefined' && chrome?.storage) ? chrome : null;
+            if (!browserAPI?.storage?.local) {
+                console.warn('Browser storage API not available.');
+                return;
+            }
+            browserAPI.storage.local.get(['minesResults'], (result) => {
+                if (browserAPI.runtime?.lastError) {
+                    console.error('Error loading mines data:', browserAPI.runtime.lastError.message);
+                    return;
+                }
+                this.processMinesData(result?.minesResults);
+            });
+        }
+
+        setupMinesStorageListener() {
+            const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
+            if (!browserAPI?.storage?.onChanged || this.minesListenerAdded) return;
+            // Debounced like the keno listener: a round can write several times
+            // while it settles, and the whole panel re-renders on each change.
+            const debounced = this.debounce((changes, area) => {
+                if (area === 'local' && changes.minesResults) {
+                    this.processMinesData(changes.minesResults.newValue);
+                }
+            }, 400);
+            browserAPI.storage.onChanged.addListener(debounced);
+            this.minesListenerAdded = true;
+        }
+
+        processMinesData(minesResults) {
+            const all = minesResults?.[this.storageOrigin] || [];
+            this._minesGames = all.filter(g => g && g.state); // newest first
+            // Keep the count the user picked while it still has rounds; otherwise
+            // follow the most recent round.
+            const counts = this.minesCountsPlayed();
+            if (!counts.includes(this.minesCount)) {
+                this.minesCount = this.minesGameCount(this._minesGames[0]) || counts[0] || null;
+            }
+            this.renderMines();
+        }
+
+        // Mines in a round. Sites tag it as minesCount/mineCount; if neither came
+        // through, the revealed layout is itself the count.
+        minesGameCount(game) {
+            if (!game) return null;
+            const tagged = Number(game.state?.minesCount ?? game.state?.mineCount) || 0;
+            if (tagged > 0) return tagged;
+            const mines = game.state?.mines;
+            return Array.isArray(mines) && mines.length ? mines.length : null;
+        }
+
+        // Mine counts played on this site, low to high.
+        minesCountsPlayed() {
+            const seen = new Set();
+            for (const g of this._minesGames) {
+                const c = this.minesGameCount(g);
+                if (c) seen.add(c);
+            }
+            return [...seen].sort((a, b) => a - b);
+        }
+
+        minesGamesForCount(count = this.minesCount) {
+            return this._minesGames.filter(g => this.minesGameCount(g) === count);
+        }
+
+        // Where the mines landed across `games`: hits per tile (0-24) and how
+        // many rounds actually carried a layout.
+        minesTileCounts(games) {
+            const hits = new Array(25).fill(0);
+            let layouts = 0;
+            for (const g of games) {
+                const mines = g.state?.mines;
+                if (!Array.isArray(mines) || !mines.length) continue;
+                layouts++;
+                for (let i = 0; i < mines.length; i++) {
+                    const pos = parseInt(mines[i], 10);
+                    if (pos >= 0 && pos < 25) hits[pos]++;
+                }
+            }
+            return { hits, layouts };
+        }
+
+        // Session numbers for a set of rounds: money P/L (shared rule), win rate
+        // and streaks. A round counts as a win when it paid anything back.
+        minesSessionStats(games) {
+            const money = VantedgeMoney.summarize(games);
+            let wins = 0;
+            for (const g of games) if ((Number(g.payoutMultiplier) || 0) > 0) wins++;
+            let streak = { type: null, count: 0 };
+            const longest = { win: 0, loss: 0 };
+            for (let i = games.length - 1; i >= 0; i--) { // oldest first
+                const type = (Number(games[i].payoutMultiplier) || 0) > 0 ? 'win' : 'loss';
+                streak = streak.type === type ? { type, count: streak.count + 1 } : { type, count: 1 };
+                if (streak.count > longest[type]) longest[type] = streak.count;
+            }
+            return {
+                money, games: games.length, wins,
+                winRate: games.length ? (wins / games.length) * 100 : 0,
+                streak, longest
+            };
+        }
+
+        renderMines() {
+            safe(() => {
+                // Header count tracks the selected mine count, so it always agrees
+                // with the Games tile rather than quietly counting other boards.
+                const total = this.overlay?.querySelector('#overlay-total-bets');
+                if (total) total.textContent = this.minesGamesForCount().length.toLocaleString();
+                const stats = this.overlay?.querySelector('.overlay-stats');
+                if (stats) {
+                    stats.title = this.minesCount
+                        ? `Finished rounds at ${this.minesCount} mines. ${this._minesGames.length} recorded here in total.`
+                        : 'Finished mines rounds recorded here.';
+                }
+                this.renderMinesStrip();
+                this.renderMinesBoard();
+                this.renderMinesHistory();
+            });
+        }
+
+        renderMinesStrip() {
+            const el = this.overlay?.querySelector('#overlay-mines-strip');
+            if (!el) return;
+            const games = this.minesGamesForCount();
+            const st = this.minesSessionStats(games);
+            const m = st.money;
+            const hasPaid = m.paid > 0;
+            const eps = curEpsilon(m.cur, m.pl);
+            const plCls = m.pl > eps ? 'hot' : (m.pl < -eps ? 'plneg' : '');
+            const roiCls = m.roi > 0.05 ? 'hot' : (m.roi < -0.05 ? 'plneg' : '');
+            const per = this.minesCount ? ` at ${this.minesCount} mines` : '';
+            const others = m.others.length
+                ? ` Also ${m.others.map(o => fmtMoney(o.pl, o.cur)).join(', ')} (kept separate — no conversion).`
+                : '';
+            const tip = {
+                games: `Finished rounds${per} on this site.`,
+                win: `Rounds that paid anything back${per} — cashing out for less than the stake still counts as a win here.`,
+                pl: hasPaid
+                    ? `Net profit${per}: stake × (multiplier − 1), summed. `
+                      + `${m.bets} paid round${m.bets === 1 ? '' : 's'}, ${fmtMoney(m.wagered, m.cur, { signed: false })} wagered.${others} Free ($0) rounds are excluded.`
+                    : `Net profit${per} on real-money rounds. Free ($0) rounds are excluded.`,
+                roi: hasPaid ? `Profit as a share of everything staked${per}.` : 'No money staked yet.'
+            };
+            el.innerHTML =
+                this.statTile('Games', st.games.toLocaleString(), '', tip.games) +
+                this.statTile('Win', st.games ? `${st.winRate.toFixed(0)}%` : '—', '', tip.win) +
+                this.statTile('P/L', hasPaid ? fmtMoney(m.pl, m.cur, { compact: true }) : '—', hasPaid ? plCls : '', tip.pl) +
+                this.statTile('ROI', hasPaid ? `${m.roi > 0 ? '+' : ''}${m.roi.toFixed(1)}%` : '—', hasPaid ? roiCls : '', tip.roi);
+        }
+
+        renderMinesBoard() {
+            const el = this.overlay?.querySelector('#overlay-mines-board');
+            if (!el) return;
+            const counts = this.minesCountsPlayed();
+            const head = `<div class="vx-combos-head"><span class="vx-section-title">Mine frequency</span>`;
+            if (!counts.length) {
+                el.innerHTML = head + `</div>
+                    <div class="vx-combos-empty">No finished mines rounds on this site yet — play one and the grid fills in.</div>`;
+                return;
+            }
+            const games = this.minesGamesForCount();
+            const { hits, layouts } = this.minesTileCounts(games);
+            const expected = layouts ? layouts * (this.minesCount / 25) : 0;
+            const { maxAbove, maxBelow } = heatSpread(hits, expected);
+
+            const tabs = counts.map(c =>
+                `<button class="vx-mtab ${c === this.minesCount ? 'on' : ''}" data-minecount="${c}" title="Rounds played with ${c} mines">${c}</button>`
+            ).join('');
+
+            // Least-mined tiles so far. Only worth showing once there's enough
+            // history that the ordering isn't just noise.
+            const ranked = hits.map((h, i) => ({ i, h })).sort((a, b) => a.h - b.h || a.i - b.i);
+            const leastSet = new Set(layouts >= 20 ? ranked.slice(0, 5).map(r => r.i) : []);
+            const leastLine = layouts >= 20
+                ? `<div class="vx-mines-least">Least mined so far: ${ranked.slice(0, 5).map(r => `<b>${r.i + 1}</b>`).join(' · ')}</div>`
+                : `<div class="vx-mines-least dim">Least-mined tiles show up after 20 rounds at this mine count (${layouts} so far).</div>`;
+
+            const cells = hits.map((h, i) => {
+                const pct = layouts ? (h / layouts) * 100 : 0;
+                const style = layouts === 0 ? HEAT_EMPTY : heatStyle(expected > 0 ? h / expected : 1, maxAbove, maxBelow);
+                const css = `background:${style.background};border-color:${style.borderColor};color:${style.color}`;
+                const title = layouts
+                    ? `Tile ${i + 1} — mined in ${h} of ${layouts} rounds (${pct.toFixed(0)}%), expected ${expected.toFixed(1)}`
+                    : `Tile ${i + 1} — no rounds yet`;
+                return `<div class="vx-mcell${leastSet.has(i) ? ' least' : ''}" style="${css}" title="${title}">
+                            <span class="vx-mnum">${i + 1}</span>
+                            <span class="vx-mpct">${layouts ? `${pct.toFixed(0)}%` : '—'}</span>
+                        </div>`;
+            }).join('');
+
+            el.innerHTML = head + `<span class="vx-chcount">${layouts} rounds</span></div>
+                <div class="vx-mtabs" title="Filter by how many mines were on the board">${tabs}<span class="vx-mtabs-k">mines</span></div>
+                <div class="vx-mines-grid">${cells}</div>
+                ${leastLine}
+                <div class="vx-mines-note">Where mines landed in your own history. Every round is drawn fresh, so this is a record, not a prediction.</div>`;
+
+            el.querySelectorAll('.vx-mtab').forEach(b => {
+                b.onclick = () => {
+                    this.minesCount = parseInt(b.dataset.minecount, 10);
+                    this.renderMines();
+                };
+            });
+        }
+
+        renderMinesHistory() {
+            const el = this.overlay?.querySelector('#overlay-mines-history');
+            if (!el) return;
+            const games = this.minesGamesForCount();
+            const head = `<div class="vx-combos-head"><span class="vx-section-title">Recent rounds</span><span class="vx-chcount">${games.length}</span></div>`;
+            if (!games.length) {
+                el.innerHTML = head + `<div class="vx-combos-empty">Nothing at this mine count yet.</div>`;
+                return;
+            }
+            const chips = games.slice(0, 16).map(g => {
+                const mult = Number(g.payoutMultiplier) || 0;
+                const win = mult > 0;
+                const profit = betProfit(g);
+                const stake = VantedgeMoney.betStake(g);
+                const title = stake
+                    ? `${mult.toFixed(2)}x on ${fmtMoney(stake, g.currency, { signed: false })} — ${fmtMoney(profit, g.currency)}`
+                    : `${mult.toFixed(2)}x on a free round`;
+                return `<span class="vx-mchip ${win ? 'win' : 'loss'}" title="${title}">${win ? `${mult.toFixed(1)}x` : '✕'}</span>`;
+            }).join('');
+            const st = this.minesSessionStats(games);
+            const { type, count } = st.streak;
+            const streakText = type
+                ? `${count} ${type === 'win' ? (count === 1 ? 'win' : 'wins') : (count === 1 ? 'loss' : 'losses')}`
+                : '—';
+            el.innerHTML = head + `
+                <div class="vx-mchips">${chips}</div>
+                <div class="vx-mstreak">Current streak <b class="${type === 'win' ? 'pos' : 'neg'}">${streakText}</b>
+                    · best run <b class="pos">${st.longest.win}W</b> / <b class="neg">${st.longest.loss}L</b></div>`;
+        }
+
+        // One status-strip tile, shared by the keno and mines strips.
+        statTile(label, value, cls = '', title = '') {
+            return `<div class="vx-stat" title="${title}"><span class="vx-stat-k">${label}</span><span class="vx-stat-v ${cls}">${value}</span></div>`;
+        }
+
+        kenoMarkup() {
+            return `
                 <div class="vx-status-strip" id="overlay-status-strip"></div>
                 <div class="keno-heatmap-container">
                     <div class="keno-heatmap-grid" id="overlay-keno-grid"></div>
@@ -1252,14 +1587,14 @@
                 </div>
                 <div class="vx-combos" id="overlay-smart-picker"></div>
                 <div class="vx-combos" id="overlay-hot-combos"></div>
-                <div class="vx-combos" id="overlay-combo-history"></div>
-            </div>`;
-            safe(() => document.body.appendChild(this.overlay));
+                <div class="vx-combos" id="overlay-combo-history"></div>`;
+        }
 
-            // The old slide-out "Alternative" drawer + its ▶ tab were removed in
-            // favour of the in-grid Core/Alternative toggle. All drawer methods
-            // (positionSideDrawer/toggleSideDrawer/etc.) null-guard, so leaving them
-            // is harmless; we simply no longer create the DOM.
+        minesMarkup() {
+            return `
+                <div class="vx-status-strip" id="overlay-mines-strip"></div>
+                <div class="vx-combos" id="overlay-mines-board"></div>
+                <div class="vx-combos" id="overlay-mines-history"></div>`;
         }
 
         // Small monochrome control glyph for the header (logo + buttons).
@@ -2815,6 +3150,84 @@
            .vx-gsort:hover { color: #e6edf3; }
            .vx-gsort.on { color: #3fb950; }
            .vx-gcar { font-size: 8px; }
+
+           /* ---- Mines mode ---- */
+           /* the AI badge drives keno strategies — nothing to apply in mines */
+           .vx-mines-mode #enhancement-status { display: none; }
+           /* two-up tiles: money and percentages need more room than a quarter
+              of the panel gives them */
+           .vx-mines-mode .vx-status-strip { grid-template-columns: repeat(2, 1fr); }
+           .vx-mtabs {
+               display: flex;
+               align-items: center;
+               gap: 4px;
+               margin: 8px 0 10px;
+           }
+           .vx-mtab {
+               background: #10161f;
+               border: 1px solid rgba(255, 255, 255, 0.08);
+               color: #8b949e;
+               border-radius: 6px;
+               padding: 2px 9px;
+               font-size: 11px;
+               font-weight: 600;
+               font-family: inherit;
+               cursor: pointer;
+               font-variant-numeric: tabular-nums;
+           }
+           .vx-mtab:hover { color: #e6edf3; border-color: rgba(255, 255, 255, 0.18); }
+           .vx-mtab.on { background: rgba(63, 185, 80, 0.16); border-color: rgba(63, 185, 80, 0.5); color: #3fb950; }
+           .vx-mtabs-k { font-size: 9px; color: #6e7681; text-transform: uppercase; letter-spacing: 0.5px; margin-left: 2px; }
+           .vx-mines-grid {
+               display: grid;
+               grid-template-columns: repeat(5, 1fr);
+               gap: 4px;
+           }
+           .vx-mcell {
+               aspect-ratio: 1;
+               display: flex;
+               flex-direction: column;
+               justify-content: center;
+               align-items: center;
+               gap: 1px;
+               border-radius: 7px;
+               border: 1.5px solid rgba(255, 255, 255, 0.05);
+               font-size: 11px;
+               font-weight: 600;
+               position: relative;
+           }
+           /* the least-mined tiles at this mine count, marked with a corner dot */
+           .vx-mcell.least::after {
+               content: '';
+               position: absolute;
+               top: 3px;
+               right: 3px;
+               width: 4px;
+               height: 4px;
+               border-radius: 50%;
+               background: #3fb950;
+               box-shadow: 0 0 4px rgba(63, 185, 80, 0.8);
+           }
+           .vx-mnum { font-size: 11px; line-height: 1; }
+           .vx-mpct { font-size: 9px; opacity: 0.75; font-variant-numeric: tabular-nums; }
+           .vx-mines-least { font-size: 10px; color: #c9d1d9; margin-top: 9px; }
+           .vx-mines-least b { color: #3fb950; }
+           .vx-mines-least.dim { color: #6e7681; }
+           .vx-mines-note { font-size: 9px; color: #6e7681; margin-top: 5px; line-height: 1.4; }
+           .vx-mchips { display: flex; flex-wrap: wrap; gap: 4px; }
+           .vx-mchip {
+               font-size: 10px;
+               font-weight: 600;
+               border-radius: 5px;
+               padding: 2px 6px;
+               border: 1px solid transparent;
+               font-variant-numeric: tabular-nums;
+           }
+           .vx-mchip.win { background: rgba(63, 185, 80, 0.14); border-color: rgba(63, 185, 80, 0.4); color: #3fb950; }
+           .vx-mchip.loss { background: rgba(229, 83, 75, 0.12); border-color: rgba(229, 83, 75, 0.35); color: #e5534b; }
+           .vx-mstreak { font-size: 10px; color: #8b949e; margin-top: 9px; }
+           .vx-mstreak b.pos { color: #3fb950; }
+           .vx-mstreak b.neg { color: #e5534b; }
            `;
 
             safe(() => document.head.appendChild(styles));
@@ -2953,18 +3366,21 @@
             const maxAttempts = 10;
             const retryDelay = 2000;
 
-            const detectionInterval = setInterval(() => {
+            // One detection loop at a time — remounting the keno body (or a URL
+            // change) would otherwise leave the old interval running.
+            clearInterval(this._kenoDetectHandle);
+            this._kenoDetectHandle = setInterval(() => {
                 attempts++;
                 const kenoButtons = this.findKenoNumbers();
 
                 if (kenoButtons && kenoButtons.length >= 35) {
-                    clearInterval(detectionInterval);
+                    clearInterval(this._kenoDetectHandle);
                     this.stakeKenoButtons = kenoButtons;
                     return;
                 }
 
                 if (attempts >= maxAttempts) {
-                    clearInterval(detectionInterval);
+                    clearInterval(this._kenoDetectHandle);
                 }
             }, retryDelay);
         }
@@ -2975,6 +3391,14 @@
                 const url = location.href;
                 if (url !== lastURL) {
                     lastURL = url;
+                    // Sites route between games without reloading, so follow the
+                    // page into the other game rather than showing a stale body.
+                    const mode = this.detectGameMode();
+                    if (mode !== this.gameMode) {
+                        this.gameMode = mode;
+                        this.mountMode();
+                        return;
+                    }
                     if (url.includes('keno')) {
                         this.cachedButtons = null;
                         this.detectKeno();
@@ -3258,14 +3682,7 @@
             // Observed spread so the tint scales to it — keeps clear hot/cold
             // contrast even once counts converge to within a few % late-game
             // (fixed 1.4x/0.6x thresholds would wash out to near-neutral).
-            let maxAbove = 0, maxBelow = 0;
-            if (average > 0) {
-                for (let i = 0; i < N; i++) {
-                    const r = hotNumbers[i] / average;
-                    if (r > 1) { if (r - 1 > maxAbove) maxAbove = r - 1; }
-                    else if (1 - r > maxBelow) maxBelow = 1 - r;
-                }
-            }
+            const { maxAbove, maxBelow } = heatSpread(hotNumbers, average);
 
             // Initialize cache on first run (or after a mode change cleared it)
             if (this.heatmapCells.length === 0) {
@@ -3300,32 +3717,12 @@
                     cached.momSlot.innerHTML = (state && state !== 'flat') ? this.momentumIcon(state) : '';
                 }
 
-                // Neutral gray near the average; brown fill = hot, blue fill = cold,
-                // each with a brighter colored edge over a subtle top→bottom gradient.
-                // Tint scales to the observed spread so it stays readable late-game.
-                const baseTop = [47, 56, 69], baseBot = [36, 44, 56], nBorder = [72, 80, 94];
-                if (totalOccurrences === 0) {
-                    cached.cell.style.background = 'linear-gradient(180deg, rgb(47,56,69), rgb(36,44,56))';
-                    cached.cell.style.borderColor = 'rgba(255,255,255,0.05)';
-                    cached.cell.style.color = '#8b949e';
-                } else {
-                    const ratio = average > 0 ? occurrences / average : 1;
-                    let fillTgt, edgeTgt, t;
-                    if (ratio >= 1) {
-                        t = maxAbove > 0 ? Math.min((ratio - 1) / maxAbove, 1) : 0;
-                        fillTgt = [112, 74, 38]; edgeTgt = [206, 138, 60];  // brown fill, amber edge
-                    } else {
-                        t = maxBelow > 0 ? Math.min((1 - ratio) / maxBelow, 1) : 0;
-                        fillTgt = [40, 80, 116]; edgeTgt = [72, 144, 198];  // steel fill, blue edge
-                    }
-                    const fmix = (a, b) => Math.round(a + (b - a) * t);
-                    const top = `rgb(${fmix(baseTop[0], fillTgt[0])}, ${fmix(baseTop[1], fillTgt[1])}, ${fmix(baseTop[2], fillTgt[2])})`;
-                    const bot = `rgb(${fmix(baseBot[0], fillTgt[0])}, ${fmix(baseBot[1], fillTgt[1])}, ${fmix(baseBot[2], fillTgt[2])})`;
-                    cached.cell.style.background = `linear-gradient(180deg, ${top}, ${bot})`;
-                    cached.cell.style.borderColor =
-                        `rgb(${fmix(nBorder[0], edgeTgt[0])}, ${fmix(nBorder[1], edgeTgt[1])}, ${fmix(nBorder[2], edgeTgt[2])})`;
-                    cached.cell.style.color = '#eef3f8';
-                }
+                // Neutral gray near the average, brown above it, blue below —
+                // the shared palette the mines grid also paints with.
+                const style = totalOccurrences === 0
+                    ? HEAT_EMPTY
+                    : heatStyle(average > 0 ? occurrences / average : 1, maxAbove, maxBelow);
+                Object.assign(cached.cell.style, style);
             }
         }
 
@@ -5268,7 +5665,10 @@
                 const siteOrigin = this.storageOrigin;
                 const siteName = new URL(siteOrigin).hostname;
 
-                if (!confirm(`⚠️ Reset stats for ${siteName}?\n\nThis will clear:\n• All game history\n• Heatmaps\n• Strategy performance data\n• Correlations\n\nYour overlay position and strategy order will be preserved.`)) {
+                const clears = this.gameMode === 'mines'
+                    ? '• Every finished mines round recorded here\n• The mine-frequency grid and streaks'
+                    : '• All game history\n• Heatmaps\n• Strategy performance data\n• Correlations';
+                if (!confirm(`⚠️ Reset stats for ${siteName}?\n\nThis will clear:\n${clears}\n\nYour overlay position and strategy order will be preserved.`)) {
                     return;
                 }
 
@@ -5334,6 +5734,13 @@
         }
 
         resetData() {
+            if (this.gameMode === 'mines') {
+                this._minesGames = [];
+                this.minesCount = null;
+                this.renderMines();
+                this.loadMinesFromStorage();
+                return;
+            }
             this.data = {
                 kenoStats: {
                     totalBets: 0,

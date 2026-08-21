@@ -1590,8 +1590,13 @@ let lastKenoStrategy = {};
     delete state.kenoEnhancedState[kenoKey];
     delete state.kenoStrategyPerformance[kenoKey];
 
+    // Mines rounds are keyed by origin, so the same reset clears this site's
+    // history — that's what the mines overlay reads. The cross-site mines
+    // aggregates the popup shows are shared by every site and stay put.
+    if (state.minesResults?.[siteOrigin]) state.minesResults[siteOrigin] = [];
+
     console.log(`📊 [RESET] After reset - Total bets: ${state.kenoTotalBets[kenoKey]}, Results: ${state.kenoResults[kenoKey].length}`);
-    console.log(`✅ [RESET] Keno data for ${siteOrigin} cleared in memory`);
+    console.log(`✅ [RESET] Keno + mines data for ${siteOrigin} cleared in memory`);
 
     // Use saveToStorage with immediate=true, which has built-in quota cleanup
     try {
