@@ -6299,12 +6299,48 @@
         return null;
     }
 
+    // Console handle, present on every page of a supported site whether or not
+    // the overlay mounted. `__vantedge.bets()` prints the stake and multiplier
+    // actually recorded for recent bets, which separates a capture problem (the
+    // stake arrived wrong) from a maths problem (right stake, wrong P/L).
+    window.__vantedge = {
+        build: OVERLAY_BUILD,
+        get route() { return routeGame(); },
+        get mounted() { return !!document.getElementById('geminyzer-overlay'); },
+        settled() {
+            const o = window.geminyzerOverlay;
+            if (!o) return null;
+            return o.gameMode === 'mines' ? o.minesGamesForCount() : (o._validBets || []);
+        },
+        pl() {
+            const list = this.settled();
+            if (!list) return 'overlay not mounted';
+            const s = self.VantedgeMoney.summarize(list);
+            return {
+                game: window.geminyzerOverlay.gameMode,
+                pl: fmtMoney(s.pl, s.cur),
+                wagered: fmtMoney(s.wagered, s.cur, { signed: false }),
+                paidBets: s.bets,
+                roi: `${s.roi > 0 ? '+' : ''}${s.roi.toFixed(1)}%`
+            };
+        },
+        bets(n = 5) {
+            const list = this.settled();
+            if (!list) return 'overlay not mounted';
+            return list.slice(0, n).map(b => ({
+                stake: Number(b?.amount) || 0,
+                multiplier: Number(b?.payoutMultiplier) || 0,
+                currency: curKey(b?.currency),
+                profit: betProfit(b)
+            }));
+        }
+    };
+
     function initializeOverlay() {
         if (window.geminyzerOverlay || !routeGame()) return;
         safe(() => {
             const overlay = new GeminyzerOverlay();
             console.log(`✅ Vantedge overlay mounted (${overlay.gameMode})`);
-            window.__vantedge = { build: OVERLAY_BUILD, route: routeGame(), get mounted() { return !!document.getElementById('geminyzer-overlay'); } };
             document.addEventListener('keydown', (e) => {
                 if (e.ctrlKey && e.shiftKey && e.key === 'G') {
                     e.preventDefault();
