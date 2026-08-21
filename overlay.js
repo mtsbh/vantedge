@@ -14,6 +14,63 @@
         }
     }
 
+    // --- Money helpers -------------------------------------------------------
+    // P/L is real money, so every display goes through here. Display precision
+    // is per currency: fiat + stablecoins to cents, crypto to the precision the
+    // casinos themselves show. Unknown tickers fall back on magnitude.
+    const CURRENCY_DECIMALS = {
+        usd: 2, usdt: 2, usdc: 2, dai: 2, busd: 2, tusd: 2, eur: 2, gbp: 2,
+        cad: 2, aud: 2, brl: 2, mxn: 2, ars: 2, pen: 2, inr: 2, try: 2,
+        jpy: 0, clp: 0, doge: 2, trx: 2, xrp: 4, sol: 4, ada: 4, matic: 4,
+        bnb: 6, eth: 6, ltc: 6, bch: 6, btc: 8
+    };
+    const CURRENCY_SYMBOLS = {
+        usd: '$', usdt: '$', usdc: '$', dai: '$', busd: '$', tusd: '$',
+        eur: '\u20ac', gbp: '\u00a3', jpy: '\u00a5', brl: 'R$', cad: 'C$', aud: 'A$'
+    };
+
+    function curKey(cur) { return String(cur || 'usd').toLowerCase(); }
+
+    // Decimals to render `cur` with. `mag` (the largest value in play) only
+    // matters for tickers that aren't in the table.
+    function curDecimals(cur, mag = 0) {
+        const d = CURRENCY_DECIMALS[curKey(cur)];
+        if (d != null) return d;
+        return Math.abs(mag) >= 1 ? 2 : 8;
+    }
+
+    // Half a display step: anything smaller rounds to zero, so it's neither a
+    // win nor a loss as far as the colouring is concerned.
+    function curEpsilon(cur, mag = 0) {
+        return Math.pow(10, -curDecimals(cur, mag)) / 2;
+    }
+
+    // "+$4.00", "-0.000012 BTC", or "+$1.2k" when compact and large. Crypto
+    // keeps its trailing zeros trimmed so 0.00001200 reads as 0.000012.
+    function fmtMoney(v, cur = 'usd', { signed = true, compact = false } = {}) {
+        const c = curKey(cur);
+        const val = Number(v) || 0;
+        const sym = CURRENCY_SYMBOLS[c];
+        const neg = val < 0;
+        const abs = Math.abs(val);
+        let n;
+        if (compact && abs >= 10000) {
+            const units = [[1e9, 'B'], [1e6, 'M'], [1e3, 'k']];
+            const [div, suf] = units.find(([d]) => abs >= d);
+            n = (abs / div).toFixed(abs / div >= 100 ? 0 : 1).replace(/\.0$/, '') + suf;
+        } else {
+            n = abs.toFixed(curDecimals(c, abs));
+            if (n.indexOf('.') !== -1 && curDecimals(c, abs) > 2) {
+                n = n.replace(/0+$/, '').replace(/\.$/, ''); // trim crypto zeros
+            }
+            const parts = n.split('.');
+            parts[0] = Number(parts[0]).toLocaleString('en-US');
+            n = parts.join('.');
+        }
+        const body = sym ? `${sym}${n}` : `${n} ${c.toUpperCase()}`;
+        return (neg ? '-' : (signed && val > 0 ? '+' : '')) + body;
+    }
+
     class GeminyzerOverlay {
         constructor() {
             this.isVisible = true;
@@ -600,19 +657,38 @@
             return { hot, cold, expected };
         }
 
-        // Session P/L in units: Σ(multiplier − 1) over paid keno bets (free bets
-        // excluded). Units, not crypto, so it's comparable across currencies.
+        // Session P/L in real money: Σ stake × (multiplier − 1) over paid keno bets
+        // (free $0 bets excluded). Stake-weighted, so a $2 bet that loses is
+        // −$2 and a $2 bet paying 3x is +$4 — not ±1 unit each. Multiplier ×
+        // amount rather than the recorded payout because some sites store profit
+        // in `payout` and others store the gross return.
+        //
+        // Currencies are kept apart (we never invent an exchange rate): the
+        // currency with the most paid bets is the headline, the rest come back
+        // in `others` for the tooltip.
         sessionPL() {
             const all = this._validBets || []; // validated, settled bets only
-            let pl = 0, paid = 0;
+            const by = Object.create(null);
+            let paid = 0;
             for (let i = 0; i < all.length; i++) {
                 const b = all[i];
-                if ((Number(b?.amount) || 0) <= 0) continue; // free/$0 bets excluded
-                pl += (Number(b?.payoutMultiplier) || 0) - 1;
+                const amt = Number(b?.amount) || 0;
+                if (!(amt > 0)) continue; // free/$0 bets excluded
+                const mult = Number(b?.payoutMultiplier) || 0;
+                const cur = curKey(b?.currency);
+                const e = by[cur] || (by[cur] = { cur, pl: 0, wagered: 0, bets: 0 });
+                e.pl += amt * (mult - 1);
+                e.wagered += amt;
+                e.bets++;
                 paid++;
             }
+            const list = Object.values(by).sort((a, b) => b.bets - a.bets || b.wagered - a.wagered);
+            const main = list[0] || { cur: 'usd', pl: 0, wagered: 0, bets: 0 };
             this._paidBetCount = paid;
-            return pl;
+            return {
+                pl: main.pl, wagered: main.wagered, cur: main.cur, bets: main.bets,
+                others: list.slice(1), paid
+            };
         }
 
         updateStatusStrip() {
@@ -620,15 +696,24 @@
             if (!el) return;
             const bets = this.data.kenoStats.totalBets;
             const { hot, cold, expected } = this.hotColdCounts();
-            const pl = this.sessionPL();
-            const hasPaid = (this._paidBetCount || 0) > 0;
-            const plCls = pl > 0.05 ? 'hot' : (pl < -0.05 ? 'plneg' : '');
+            const plStat = this.sessionPL();
+            const hasPaid = plStat.paid > 0;
+            const eps = curEpsilon(plStat.cur, plStat.pl);
+            const plCls = plStat.pl > eps ? 'hot' : (plStat.pl < -eps ? 'plneg' : '');
             const exp = expected ? Math.round(expected) : 0;
+            const roi = plStat.wagered > 0 ? (plStat.pl / plStat.wagered) * 100 : 0;
+            const others = plStat.others.length
+                ? ` Also ${plStat.others.map(o => fmtMoney(o.pl, o.cur)).join(', ')} (kept separate — no conversion).`
+                : '';
             const tip = {
                 bets: 'Settled bets tracked on this seed.',
                 hot: `Numbers drawn 15%+ ABOVE expected (~${exp}× each so far). How many are running hot.`,
                 cold: `Numbers drawn 15%+ BELOW expected (~${exp}× each so far). How many are running cold.`,
-                pl: 'Net units on real-money bets: sum of (multiplier − 1). Free ($0) bets are excluded.'
+                pl: hasPaid
+                    ? `Net profit on real-money bets: stake × (multiplier − 1), summed. `
+                      + `${plStat.bets} paid bet${plStat.bets === 1 ? '' : 's'}, ${fmtMoney(plStat.wagered, plStat.cur, { signed: false })} wagered, `
+                      + `ROI ${roi > 0 ? '+' : ''}${roi.toFixed(1)}%.${others} Free ($0) bets are excluded.`
+                    : 'Net profit on real-money bets: stake × (multiplier − 1), summed. Free ($0) bets are excluded.'
             };
             const tile = (label, value, cls = '', title = '') =>
                 `<div class="vx-stat" title="${title}"><span class="vx-stat-k">${label}</span><span class="vx-stat-v ${cls}">${value}</span></div>`;
@@ -637,7 +722,7 @@
                 tile('Hot', bets ? hot : '—', 'hot', tip.hot) +
                 tile('Cold', bets ? cold : '—', 'cold', tip.cold) +
                 // Only real-money bets have P/L; free ($0) play shows "—".
-                tile('P/L', hasPaid ? this.plFmt(pl) : '—', hasPaid ? plCls : '', tip.pl);
+                tile('P/L', hasPaid ? fmtMoney(plStat.pl, plStat.cur, { compact: true }) : '—', hasPaid ? plCls : '', tip.pl);
         }
 
         // Top co-occurring number trios from recent draws. Strength is each trio's
@@ -912,12 +997,24 @@
                 if (nums.length < 2) continue;
                 const key = nums.join('-');
                 let m = map[key];
-                if (!m) m = map[key] = { key, numbers: nums, plays: 0, paid: 0, sumMult: 0, best: 0, pl: 0, firstSeen: i, lastSeen: i };
+                if (!m) m = map[key] = {
+                    key, numbers: nums, plays: 0, paid: 0, sumMult: 0, best: 0,
+                    pl: 0, wagered: 0, cur: null, mixed: false, firstSeen: i, lastSeen: i
+                };
                 m.plays++;
                 const mult = Number(b.payoutMultiplier) || 0;
                 const amt = Number(b.amount) || 0;
                 if (mult > m.best) m.best = mult;
-                if (amt > 0) { m.paid++; m.sumMult += mult; m.pl += (mult - 1); }
+                // Money P/L, same rule as sessionPL: stake × (multiplier − 1).
+                if (amt > 0) {
+                    m.paid++;
+                    m.sumMult += mult;
+                    m.pl += amt * (mult - 1);
+                    m.wagered += amt;
+                    const cur = curKey(b.currency);
+                    if (m.cur === null) m.cur = cur;
+                    else if (m.cur !== cur) m.mixed = true; // don't mix currencies in one total
+                }
                 if (i < m.firstSeen) m.firstSeen = i;
                 if (i > m.lastSeen) m.lastSeen = i;
             }
@@ -925,6 +1022,8 @@
                 const m = map[k];
                 m.avg = m.paid > 0 ? m.sumMult / m.paid : 0;
                 m.age = m.lastSeen; // bets since the combo was first played
+                m.roi = m.wagered > 0 ? (m.pl / m.wagered) * 100 : 0;
+                if (m.cur === null) m.cur = 'usd';
             }
             this._comboHistCache = { ref: all, map };
             return map;
@@ -951,13 +1050,23 @@
             const g = this.comboGap([...numbers].sort((a, b) => a - b));
             return {
                 best: m?.best || 0, avg: m?.avg || 0, plays: m?.plays || 0,
-                pl: m?.pl || 0, gap: g.gap, hits: g.hits
+                pl: m?.pl || 0, wagered: m?.wagered || 0, cur: m?.cur || 'usd',
+                mixed: !!m?.mixed, paid: m?.paid || 0, roi: m?.roi || 0,
+                gap: g.gap, hits: g.hits
             };
         }
 
-        plFmt(v) {
-            const r = Math.round(v * 10) / 10;
-            return (r > 0 ? '+' : '') + r.toFixed(1);
+        // Money P/L for a combo row. Combos played across two currencies can't be
+        // added up, so those show the mixed marker instead of a wrong total.
+        plFmt(v, cur = 'usd', opts = {}) {
+            if (opts.mixed) return 'mixed';
+            return fmtMoney(v, cur, opts);
+        }
+
+        // Win / loss / flat for a money P/L, at that currency's display precision.
+        plClass(v, cur, pos = 'pos', neg = 'neg') {
+            const eps = curEpsilon(cur, v);
+            return v > eps ? pos : (v < -eps ? neg : '');
         }
 
         // Top payout multipliers ever landed for an exact combo, with hit counts.
@@ -996,11 +1105,16 @@
             const rows = combos.map(m => {
                 const g = this.comboGap(m.numbers);
                 const gapText = g.gap == null ? '—' : (g.gap === 0 ? 'NOW' : g.gap);
-                const plCls = m.pl > 0.05 ? 'pos' : (m.pl < -0.05 ? 'neg' : '');
+                const plCls = m.mixed ? '' : this.plClass(m.pl, m.cur);
+                const plTitle = m.paid
+                    ? (m.mixed
+                        ? 'Played in more than one currency — totals aren\'t comparable, so no sum is shown.'
+                        : `Net profit: stake × (multiplier − 1), summed. ${fmtMoney(m.wagered, m.cur, { signed: false })} wagered over ${m.paid} paid play${m.paid === 1 ? '' : 's'}, ROI ${m.roi > 0 ? '+' : ''}${m.roi.toFixed(1)}%.`)
+                    : 'Only free ($0) plays so far — no money staked.';
                 return `<div class="vx-chrow" data-combo-numbers="${m.numbers.join(',')}">
                             <div class="vx-chtop">
                                 <span class="vx-gnums">${m.numbers.join('-')}</span>
-                                <span class="vx-chpl ${plCls}">${this.plFmt(m.pl)}</span>
+                                <span class="vx-chpl ${plCls}" title="${plTitle}">${m.paid ? this.plFmt(m.pl, m.cur, { mixed: m.mixed, compact: true }) : '—'}</span>
                             </div>
                             <div class="vx-chsub">best <span class="vx-chbest" title="Top multipliers — click to expand">${m.best.toFixed(1)}x</span> · avg ${m.avg.toFixed(1)}x · ${m.plays} plays · gap ${gapText}</div>
                             <div class="vx-chdetail" hidden></div>
@@ -1128,7 +1242,7 @@
                     <span>avg <b>${stats.avg.toFixed(1)}x</b></span>
                     <span>plays <b>${stats.plays}</b></span>
                     <span>gap <b>${gapText}</b></span>
-                    <span>P/L <b class="${stats.pl > 0.05 ? 'pos' : (stats.pl < -0.05 ? 'neg' : '')}">${this.plFmt(stats.pl)}</b></span>
+                    <span title="${stats.paid ? `Net profit on ${stats.paid} paid play${stats.paid === 1 ? '' : 's'} of this exact combo, ${fmtMoney(stats.wagered, stats.cur, { signed: false })} wagered.` : 'No money staked on this combo yet.'}">P/L <b class="${stats.mixed ? '' : this.plClass(stats.pl, stats.cur)}">${stats.paid ? this.plFmt(stats.pl, stats.cur, { mixed: stats.mixed, compact: true }) : '—'}</b></span>
                 </div>` : '';
 
             el.innerHTML = `
@@ -2523,6 +2637,11 @@
                color: #e6edf3;
                white-space: nowrap;
                font-variant-numeric: tabular-nums;
+               /* money P/L can be long ("+1,234.56 USDT") — clip instead of
+                  stretching the 4-up grid */
+               min-width: 0;
+               overflow: hidden;
+               text-overflow: ellipsis;
            }
            .vx-stat-v.hot { color: #3fb950; }
            .vx-stat-v.cold { color: #58a6ff; }
