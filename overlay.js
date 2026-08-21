@@ -3,7 +3,12 @@
 
     if (window.geminyzerOverlay) return;
 
-    // Vantedge Live Overlay initialized
+    const OVERLAY_BUILD = '3.26';
+    // Logged on every page of a supported site, before anything else can fail.
+    // If this line is missing from the console, the script isn't being injected
+    // at all (stale extension, or the page isn't in the manifest's match list)
+    // — as opposed to being injected and declining to mount.
+    console.log(`Vantedge: overlay script loaded (build ${OVERLAY_BUILD}, path ${location.pathname})`);
 
     function safe(fn, context = 'General') {
         try {
@@ -17,6 +22,10 @@
     // Money math + formatting live in money.js (loaded just ahead of this file
     // by the manifest) so the overlay, popup and service worker all count P/L
     // the same way.
+    if (!self.VantedgeMoney) {
+        console.error('Vantedge: money.js did not load before overlay.js — check the extension files. Overlay disabled.');
+        return;
+    }
     const { curKey, curEpsilon, fmtMoney, betProfit } = self.VantedgeMoney;
 
     // Shared heat palette for both grids (keno numbers, mines tiles): neutral
@@ -6295,6 +6304,7 @@
         safe(() => {
             const overlay = new GeminyzerOverlay();
             console.log(`✅ Vantedge overlay mounted (${overlay.gameMode})`);
+            window.__vantedge = { build: OVERLAY_BUILD, route: routeGame(), get mounted() { return !!document.getElementById('geminyzer-overlay'); } };
             document.addEventListener('keydown', (e) => {
                 if (e.ctrlKey && e.shiftKey && e.key === 'G') {
                     e.preventDefault();
@@ -6327,9 +6337,20 @@
         }
     }
 
+    // The site's router can re-render the page out from under us and take the
+    // overlay node with it, leaving a live instance pointing at a detached div.
+    // Rebuild when that happens instead of staying invisible.
+    function checkAlive() {
+        if (!routeGame() || !window.geminyzerOverlay) return;
+        if (document.getElementById('geminyzer-overlay')) return;
+        console.log('Vantedge: overlay node was removed by the page — remounting');
+        safe(() => window.geminyzerOverlay.destroy());
+        initializeOverlay();
+    }
+
     function startRouteWatch() {
         checkRoute();
-        setInterval(checkRoute, 1000);
+        setInterval(() => { checkRoute(); checkAlive(); }, 1000);
     }
 
     if (document.readyState === 'loading') {
