@@ -1,3 +1,13 @@
+// Shared money math (VantedgeMoney) — same importScripts / background.scripts
+// pattern as the modules below. Every surface counts P/L through it.
+try {
+  if (typeof self.VantedgeMoney === 'undefined' && typeof importScripts === 'function') {
+    importScripts('money.js');
+  }
+} catch (error) {
+  console.error('❌ Failed to load money helpers:', error);
+}
+
 // Storage manager is loaded via service_worker importScripts (Chrome / FF 121+)
 // or via background.scripts (Firefox < 121). Either way VantEdgeStorageManager
 // ends up on the global scope by the time this script runs.
@@ -585,6 +595,10 @@ let lastKenoStrategy = {};
   // repopulates the heatmaps / advanced stats / predictions the popup reads.
   // Growth is capped and there is no per-tick work (only completed rounds).
   // =================================================================
+  // Finished mines rounds kept per site — deep enough for the overlay's
+  // heatmap to mean something without bloating storage (~350 bytes a round).
+  const MINES_HISTORY_LIMIT = 500;
+
   function ensureMinesStatsShape() {
     const s = state.minesAdvancedStats || (state.minesAdvancedStats = {});
     if (typeof s.totalGames !== 'number') s.totalGames = 0;
@@ -592,6 +606,7 @@ let lastKenoStrategy = {};
     if (typeof s.losses !== 'number') s.losses = 0;
     if (typeof s.totalProfit !== 'number') s.totalProfit = 0;
     if (typeof s.totalWagered !== 'number') s.totalWagered = 0;
+    if (typeof s.currency !== 'string') s.currency = 'btc'; // stats saved before this field existed
     if (!s.streaks) s.streaks = { current: { type: null, count: 0 }, longest: { win: 0, loss: 0 } };
     if (!s.patterns) s.patterns = { clusters: [], safeZones: [], hotSpots: [] };
     if (!Array.isArray(s.gameHistory)) s.gameHistory = [];
@@ -612,8 +627,11 @@ let lastKenoStrategy = {};
     state.currentMineCount = mineCount;
 
     state.minesResults[siteKey].unshift(betData);
-    if (state.minesResults[siteKey].length > 100) {
-      state.minesResults[siteKey] = state.minesResults[siteKey].slice(0, 100);
+    // The overlay's heatmap, clusters and combo history all read this window,
+    // so keep a session's worth of rounds. The emergency cleanup below still
+    // cuts it back to 100 if storage ever runs tight.
+    if (state.minesResults[siteKey].length > MINES_HISTORY_LIMIT) {
+      state.minesResults[siteKey] = state.minesResults[siteKey].slice(0, MINES_HISTORY_LIMIT);
     }
 
     updateMinesAdvancedStats(betData, betData.payoutMultiplier > 0);
@@ -655,9 +673,12 @@ let lastKenoStrategy = {};
     stats.totalGames++;
     if (isWin) stats.wins++; else stats.losses++;
 
-    const gameProfit = (betData.payout || 0) - (betData.amount || 0);
+    // Stake × (multiplier − 1) — `payout` means gross return on some sites and
+    // profit on others, so it can't be differenced against the stake.
+    const gameProfit = self.VantedgeMoney.betProfit(betData);
     stats.totalProfit += gameProfit;
-    stats.totalWagered += (betData.amount || 0);
+    stats.totalWagered += self.VantedgeMoney.betStake(betData);
+    if (betData.currency) stats.currency = self.VantedgeMoney.curKey(betData.currency);
 
     const cur = stats.streaks.current;
     if (cur.type === null || (isWin && cur.type === 'win') || (!isWin && cur.type === 'loss')) {
@@ -681,6 +702,7 @@ let lastKenoStrategy = {};
       mines: betData.state?.mines || [],
       rounds: betData.state?.rounds || [],
       profit: gameProfit,
+      currency: stats.currency,
       mineCount
     };
 
@@ -862,14 +884,20 @@ let lastKenoStrategy = {};
           };
         }
         legend.hitsByMultiplier[multiplier].count = (legend.hitsByMultiplier[multiplier].count || 0) + 1;
-        legend.hitsByMultiplier[multiplier].totalPayout = (legend.hitsByMultiplier[multiplier].totalPayout || 0) + (betData.payout || 0);
+        // Gross return = stake × multiplier. Derived rather than read from
+        // `payout`, which some sites fill with profit instead of the return.
+        legend.hitsByMultiplier[multiplier].totalPayout =
+          (legend.hitsByMultiplier[multiplier].totalPayout || 0)
+          + self.VantedgeMoney.betStake(betData) * (Number(betData.payoutMultiplier) || 0);
+        legend.currency = self.VantedgeMoney.curKey(betData.currency);
 
         legend.hitsByStrategy[activeKenoStrategy] = (legend.hitsByStrategy[activeKenoStrategy] || 0) + 1;
 
         legend.recentHits.unshift({
           multiplier: betData.payoutMultiplier,
           strategy: activeKenoStrategy,
-          amount: betData.amount || 0,  // Store bet amount for profit calculation
+          amount: betData.amount || 0,  // amount + multiplier give the profit
+          currency: self.VantedgeMoney.curKey(betData.currency),
           payout: betData.payout || 0,
           timestamp: new Date().toISOString()
         });
@@ -1644,8 +1672,13 @@ let lastKenoStrategy = {};
     delete state.kenoEnhancedState[kenoKey];
     delete state.kenoStrategyPerformance[kenoKey];
 
+    // Mines rounds are keyed by origin, so the same reset clears this site's
+    // history — that's what the mines overlay reads. The cross-site mines
+    // aggregates the popup shows are shared by every site and stay put.
+    if (state.minesResults?.[siteOrigin]) state.minesResults[siteOrigin] = [];
+
     console.log(`📊 [RESET] After reset - Total bets: ${state.kenoTotalBets[kenoKey]}, Results: ${state.kenoResults[kenoKey].length}`);
-    console.log(`✅ [RESET] Keno data for ${siteOrigin} cleared in memory`);
+    console.log(`✅ [RESET] Keno + mines data for ${siteOrigin} cleared in memory`);
 
     // Use saveToStorage with immediate=true, which has built-in quota cleanup
     try {

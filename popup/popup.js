@@ -451,13 +451,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   };
 
+  // Stake-weighted P/L, same rule as the overlay: Σ stake × (multiplier − 1),
+  // free ($0) bets excluded, currencies kept apart (see money.js).
   const calculateStats = (bets) => {
-    const totalProfit = bets.reduce((sum, bet) => sum + (bet.payout - bet.amount), 0).toFixed(8);
+    const rollup = VantedgeMoney.summarize(bets);
     return {
       totalBets: bets.length,
-      averageReturn: ((bets.reduce((sum, bet) => sum + bet.payoutMultiplier, 0) / bets.length) * 100).toFixed(2),
-      profitLoss: totalProfit,
-      currency: bets[0]?.currency || 'btc'
+      averageReturn: bets.length
+        ? ((bets.reduce((sum, bet) => sum + (Number(bet.payoutMultiplier) || 0), 0) / bets.length) * 100).toFixed(2)
+        : '0.00',
+      profitLoss: rollup.pl,
+      wagered: rollup.wagered,
+      currency: rollup.cur,
+      others: rollup.others
     };
   };
 
@@ -465,13 +471,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     const isHot = parseFloat(stats.averageReturn) > 100;
     updateElement('totalBets', stats.totalBets);
     updateElement('averageReturn', `${stats.averageReturn}%`, isHot ? 'hot' : 'cold');
-    const profitBtc = stats.profitLoss;
-    let profitText = `${profitBtc} ${stats.currency.toUpperCase()}`;
-    if (btcPrice && stats.currency === 'btc') {
-      const profitUsd = (parseFloat(profitBtc) * btcPrice).toFixed(2);
-      profitText += ` ($${profitUsd})`;
+    const pl = Number(stats.profitLoss) || 0;
+    const cur = stats.currency || 'usd';
+    let profitText = VantedgeMoney.fmtMoney(pl, cur);
+    // BTC is the one currency we can price, and only against USD.
+    if (btcPrice && VantedgeMoney.curKey(cur) === 'btc') {
+      profitText += ` (${VantedgeMoney.fmtMoney(pl * btcPrice, 'usd')})`;
     }
-    updateElement('profitLoss', profitText, parseFloat(stats.profitLoss) > 0 ? 'hot' : 'cold');
+    // Bets in other currencies ride alongside rather than being summed at an
+    // invented rate.
+    (stats.others || []).forEach(o => { profitText += ` · ${VantedgeMoney.fmtMoney(o.pl, o.cur)}`; });
+    const eps = VantedgeMoney.curEpsilon(cur, pl);
+    updateElement('profitLoss', profitText, pl > eps ? 'hot' : (pl < -eps ? 'cold' : ''));
     updateElement('status', isHot ? 'HOT' : 'COLD', isHot ? 'hot' : 'cold');
   };
 
@@ -983,11 +994,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Populate Recent Hits
     if (legendData.recentHits && legendData.recentHits.length > 0) {
       elements.legendRecentHits.innerHTML = legendData.recentHits.map(hit => {
-        // Use stored payout directly; fall back to multiplier × amount if missing
-        const payout = hit.payout != null
-            ? hit.payout
-            : (hit.amount || 0) * (hit.multiplier || 0);
-        const profitDisplay = payout ? ` (+$${payout.toFixed(2)})` : '';
+        // Profit on the hit — stake × (multiplier − 1), not the recorded payout,
+        // which is a gross return on some sites and a profit on others. Hits
+        // stored before the currency was recorded fall back to USD.
+        const profit = VantedgeMoney.betProfit({
+          amount: hit.amount, payoutMultiplier: hit.multiplier
+        });
+        const profitDisplay = profit ? ` (${VantedgeMoney.fmtMoney(profit, hit.currency)})` : '';
         return `
             <div class="pattern-item">
                 <span><strong>${hit.multiplier}x</strong> via <em>${hit.strategy}</em>${profitDisplay}</span>
@@ -1044,8 +1057,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         .sort(([a], [b]) => parseFloat(b) - parseFloat(a))
         .map(([multiplier, data]) => {
           const count = data.count || 0;
-          const totalPayout = data.totalPayout ? data.totalPayout.toFixed(2) : '0.00';
-          return `<tr><td>${multiplier}x</td><td>${count}</td><td>$${totalPayout}</td></tr>`;
+          const totalPayout = VantedgeMoney.fmtMoney(data.totalPayout || 0, legendData.currency, { signed: false });
+          return `<tr><td>${multiplier}x</td><td>${count}</td><td>${totalPayout}</td></tr>`;
         })
         .join('');
     }
@@ -1171,12 +1184,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       elements.minesWinRate.className = `stat-value ${parseFloat(winRate) >= 50 ? 'win' : 'loss'}`;
     }
 
-    const profitBtc = (stats.totalProfit || 0).toFixed(6);
+    const profit = Number(stats.totalProfit) || 0;
+    const cur = stats.currency || 'btc'; // stats saved before the field existed
     if (elements.minesProfit) {
-      let profitText = `${profitBtc} BTC`;
-      if (btcPrice) profitText += ` ($${(parseFloat(profitBtc) * btcPrice).toFixed(2)})`;
+      let profitText = VantedgeMoney.fmtMoney(profit, cur);
+      if (btcPrice && VantedgeMoney.curKey(cur) === 'btc') {
+        profitText += ` (${VantedgeMoney.fmtMoney(profit * btcPrice, 'usd')})`;
+      }
       elements.minesProfit.textContent = profitText;
-      elements.minesProfit.className = `stat-value ${parseFloat(profitBtc) >= 0 ? 'win' : 'loss'}`;
+      elements.minesProfit.className = `stat-value ${profit >= 0 ? 'win' : 'loss'}`;
     }
 
     const roi = stats.totalWagered > 0 ? ((stats.totalProfit / stats.totalWagered) * 100).toFixed(1) : 0;
@@ -1256,7 +1272,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           <strong class="${game.isWin ? 'win' : 'loss'}">${game.isWin ? 'WIN' : 'LOSS'}</strong>
           <div style="font-size: 10px; color: var(--text-secondary);">${getTimeAgo(new Date(game.timestamp))} â€¢ ${game.mineCount} mines</div>
         </div>
-        <div class="${game.isWin ? 'win' : 'loss'}">${game.profit.toFixed(6)}</div>
+        <div class="${game.isWin ? 'win' : 'loss'}">${VantedgeMoney.fmtMoney(game.profit, game.currency || 'btc')}</div>
       </div>
     `).join('');
   };
@@ -1297,7 +1313,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ======================
 
   const clearDisplayedData = () => {
-    updateStats({ totalBets: 0, averageReturn: '0.00', profitLoss: '0.00000000', currency: 'btc' });
+    updateStats({ totalBets: 0, averageReturn: '0.00', profitLoss: 0, wagered: 0, currency: 'usd', others: [] });
     if (elements.resultsTable) elements.resultsTable.innerHTML = '';
     if (elements.multipliersTable) elements.multipliersTable.innerHTML = '';
 
