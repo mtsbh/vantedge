@@ -107,7 +107,7 @@ let lastKenoStrategy = {};
     seedResults: {}, allMultipliers: {}, betsSinceMultiplier: {}, lastOccurrenceMultiplier: {},
     kenoResults: {}, kenoHotNumbers: {}, kenoCorrelations: { 2: {}, 3: {}, 4: {}, 5: {}, 6: {} },
     kenoLastOccurrences: { 2: {}, 3: {}, 4: {}, 5: {}, 6: {} }, kenoLastSeen: { 2: {}, 3: {}, 4: {}, 5: {}, 6: {} },
-    kenoTotalBets: {}, kenoEnhancedState: {}, minesResults: {}, minesHeatmaps: {}, currentMineCount: 3,
+    kenoTotalBets: {}, kenoLifetimeBets: {}, kenoEnhancedState: {}, minesResults: {}, minesHeatmaps: {}, currentMineCount: 3,
     minesAdvancedStats: { totalGames: 0, wins: 0, losses: 0, totalProfit: 0, totalWagered: 0, streaks: { current: { type: null, count: 0 }, longest: { win: 0, loss: 0 } }, patterns: { clusters: [], safeZones: [], hotSpots: [] }, gameHistory: [], gamesByMineCount: {}, currentMineCount: 3 }, legendStats: {}, lastPlayedGame: 'Plinko',
     // NEW: Enhanced prediction tracking
     kenoStrategyPerformance: {}, // Track win rate & multiplier per strategy
@@ -127,12 +127,74 @@ let lastKenoStrategy = {};
     try {
       const result = await browser.storage.local.get(null);
       state = { ...state, ...result };
+      migrateWinnaOrigins();
       return true;
     } catch (error) {
       console.error('Failed to load state from storage:', error);
       return false;
     }
   })();
+
+  // Winna moved the keno board off the games.winna.com iframe and onto
+  // winna.com/game/originals/keno, so bets were captured under whichever origin
+  // the frame happened to have while the overlay only ever reads
+  // games.winna.com. injected.js now canonicalises the origin, but sessions
+  // recorded before that fix are stranded under the old keys — merge them in.
+  //
+  // Additive only: nothing is deleted, and bets already under the canonical key
+  // win, so running this more than once is a no-op.
+  function migrateWinnaOrigins() {
+    const CANON = 'https://games.winna.com';
+    // 'null' is the opaque origin of Winna's sandboxed game frame — bets landed
+    // there while site was derived from window.location.origin.
+    const LEGACY = ['https://winna.com', 'https://originals.winna.com', 'null'];
+    const canonKey = `${CANON}-keno-session`;
+    let merged = 0;
+
+    LEGACY.forEach(origin => {
+      const legacyKey = `${origin}-keno-session`;
+      const legacy = state.kenoResults?.[legacyKey];
+      if (!Array.isArray(legacy) || legacy.length === 0) return;
+
+      if (!state.kenoResults) state.kenoResults = {};
+      const canon = state.kenoResults[canonKey] || [];
+      const seen = new Set(canon.map(b => b?.id));
+      const additions = legacy.filter(b => b && !seen.has(b.id));
+      if (additions.length === 0) return;
+
+      // kenoResults is newest-first; bets carry an ISO timestamp, so re-sort the
+      // union rather than assuming the two ranges don't interleave.
+      state.kenoResults[canonKey] = canon.concat(additions).sort(
+        (a, b) => new Date(b?.timestamp || 0) - new Date(a?.timestamp || 0)
+      );
+      if (state.kenoResults[canonKey].length > 1500) state.kenoResults[canonKey].length = 1500;
+
+      if (!state.kenoLifetimeBets) state.kenoLifetimeBets = {};
+      if (!state.kenoTotalBets) state.kenoTotalBets = {};
+      const legacyLifetime = state.kenoLifetimeBets[legacyKey] || legacy.length;
+      state.kenoLifetimeBets[canonKey] = (state.kenoLifetimeBets[canonKey] || 0) + legacyLifetime;
+      state.kenoTotalBets[canonKey] = state.kenoLifetimeBets[canonKey];
+
+      merged += additions.length;
+    });
+
+    if (merged > 0) {
+      // Hot numbers are derived; rebuild from the merged buffer so they can't
+      // disagree with it.
+      if (!state.kenoHotNumbers) state.kenoHotNumbers = {};
+      const counts = new Array(40).fill(0);
+      (state.kenoResults[canonKey] || []).forEach(bet => {
+        (bet?.state?.drawnNumbers || []).forEach(num => {
+          const n = parseInt(num, 10);
+          if (n >= 1 && n <= 40) counts[n - 1]++;
+        });
+      });
+      state.kenoHotNumbers[canonKey] = counts;
+
+      console.log(`♻️ Vantedge: merged ${merged} Winna bet(s) from legacy origins into ${canonKey}`);
+      saveToStorage();
+    }
+  }
 
   // Initialize sophisticated storage manager for persistent legend stats
   (async () => {
@@ -864,7 +926,18 @@ let lastKenoStrategy = {};
     // write + onChanged payload, which is what made long sessions lag.
     if (state.kenoResults[siteKey].length > 1500) state.kenoResults[siteKey].length = 1500;
 
-    state.kenoTotalBets[siteKey] = state.kenoResults[siteKey].length;
+    // Lifetime bet count — independent of the 1500 buffer cap so the visible
+    // counter keeps climbing after the buffer stops growing. The dedup guard
+    // above already returned for repeat ids, so each real bet counts once.
+    if (state.kenoLifetimeBets[siteKey] == null) {
+      // First bet since this feature landed: seed from the buffer so existing
+      // sessions don't reset to 1 (best available lower bound — true history
+      // before now was never stored).
+      state.kenoLifetimeBets[siteKey] = state.kenoResults[siteKey].length;
+    } else {
+      state.kenoLifetimeBets[siteKey]++;
+    }
+    state.kenoTotalBets[siteKey] = state.kenoLifetimeBets[siteKey];
 
     if (!state.kenoHotNumbers[siteKey]) state.kenoHotNumbers[siteKey] = new Array(40).fill(0);
     betData.state.drawnNumbers.forEach(num => {
@@ -1581,6 +1654,7 @@ let lastKenoStrategy = {};
     if (!state.kenoResults) state.kenoResults = {};
     if (!state.kenoHotNumbers) state.kenoHotNumbers = {};
     if (!state.kenoTotalBets) state.kenoTotalBets = {};
+    if (!state.kenoLifetimeBets) state.kenoLifetimeBets = {};
     if (!state.kenoCorrelations) state.kenoCorrelations = {};
     if (!state.kenoLastOccurrences) state.kenoLastOccurrences = {};
     if (!state.kenoLastSeen) state.kenoLastSeen = {};
@@ -1591,6 +1665,7 @@ let lastKenoStrategy = {};
     state.kenoResults[kenoKey] = [];
     state.kenoHotNumbers[kenoKey] = new Array(40).fill(0);
     state.kenoTotalBets[kenoKey] = 0;
+    state.kenoLifetimeBets[kenoKey] = 0;
     delete state.kenoCorrelations[kenoKey];
     delete state.kenoLastOccurrences[kenoKey];
     delete state.kenoLastSeen[kenoKey];

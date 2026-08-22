@@ -1,7 +1,29 @@
 // Vantedge injected script
 (function () {
-    const site = window.location.origin;
-    const DEBUG = false;  // Disable debug logging for production
+    // Storage origin. Bets are keyed by this string all the way through
+    // (background stores `${site}-keno-session`), so every frame of a site must
+    // report the SAME origin or the overlay reads an empty key.
+    //
+    // Winna serves the board from more than one host (winna.com shell,
+    // games.winna.com and originals.winna.com game frames) and has moved between
+    // them. The overlay, popup and background all resolve Winna to
+    // games.winna.com, so canonicalise here to match — otherwise bets are
+    // captured correctly but stored under a key nothing ever reads.
+    // IMPORTANT: Winna's game frame is sandboxed WITHOUT allow-same-origin (the
+    // console shows "The document is sandboxed and lacks the 'allow-same-origin'
+    // flag"), which makes it an OPAQUE origin — window.location.origin there is
+    // the string "null", not a URL. Keying off origin therefore filed every Winna
+    // bet under "null-keno-session". hostname is still readable in a sandboxed
+    // frame, so derive the site from that instead.
+    const rawOrigin = window.location.origin;
+    const host = window.location.hostname || '';
+    const site = host.includes('winna.com') ? 'https://games.winna.com' : rawOrigin;
+
+    // Off in production. Turn on per-tab without a rebuild:
+    //   localStorage.vantedge_debug = '1'   then reload
+    const DEBUG = (() => {
+        try { return localStorage.getItem('vantedge_debug') === '1'; } catch (e) { return false; }
+    })();
     function log(...args) { if (DEBUG) console.log('[Vantedge]', ...args); }
 
     // ── Native-function cloaking ──────────────────────────────────────────────
@@ -56,6 +78,16 @@
         '/api/keno' // Acebet API Endpoint
     ];
 
+    // Winna moves its game host around (originals.winna.com, and now
+    // games-prod.winna.com — the frame src is
+    // https://games-prod.winna.com/game/keno?...). Match any Winna host serving a
+    // keno endpoint rather than maintaining a list that goes stale on every move.
+    function isWinnaKenoURL(url) {
+        if (typeof url !== 'string') return false;
+        const u = url.toLowerCase();
+        return u.includes('winna.com') && u.includes('keno');
+    }
+
     const originalXHR = window.XMLHttpRequest;
     function interceptXHR() {
         const xhr = new originalXHR();
@@ -72,6 +104,7 @@
             this._requestData = data;
 
             const shouldIntercept = gameAPIEndpoints.some(endpoint => this._url.includes(endpoint)) ||
+                                   isWinnaKenoURL(this._url) ||
                                    (site.includes('betfury.com') && this._url.toLowerCase().includes('keno'));
 
             if (shouldIntercept) {
@@ -112,6 +145,7 @@
 
         // Only intercept game-specific endpoints or BetFury Keno
         const shouldIntercept = gameAPIEndpoints.some(endpoint => url.includes(endpoint)) ||
+                               isWinnaKenoURL(url) ||
                                (site.includes('betfury.com') && url.toLowerCase().includes('keno')) ||
                                (site.includes('betfury.com') && method === 'POST');
 
@@ -262,8 +296,11 @@
             if (url.includes('/keno/play') && !url.includes('/keno/finish')) {
                 const response = JSON.parse(responseText);
 
-                // Check if we have the required data
-                if (response.id && response.data && response.data.tiles && response.data.user_tiles) {
+                // Accept both the flat and `game`-wrapped shapes. Only `tiles` is
+                // required — user_tiles is absent on some responses and the stats
+                // only need the drawn numbers.
+                const bet = unwrapWinnaBet(response);
+                if (bet && Array.isArray(bet.data.tiles) && bet.data.tiles.length) {
                     const transformedData = transformWinnaKenoData(response);
                     if (transformedData) {
                         window.postMessage({
@@ -280,13 +317,58 @@
         }
     }
 
-    function transformWinnaKenoData(response) {
-        // New Winna API format - data is at root level, not nested
-        if (!response || !response.data) return null;
+    // Winna's game frame talks socket.io (wss://api2.winna.com/socket.io/), whose
+    // frames are engine.io-prefixed — `42["bet",{...}]`, `0{...}`, `40`. A plain
+    // JSON.parse throws on all of those, so strip the numeric prefix and, for an
+    // event frame, return the payload object rather than the ["name", …] tuple.
+    // Plain-JSON sockets still work: the first branch passes them straight through.
+    function parseWinnaSocketFrame(raw) {
+        const s = String(raw).trim();
+        let body = (s[0] === '{' || s[0] === '[') ? s : null;
+        if (!body) {
+            const m = s.match(/^\d+([\s\S]*)$/);
+            if (!m) return null;
+            body = m[1].trim();
+            if (body[0] !== '{' && body[0] !== '[') return null;
+        }
+        let json;
+        try { json = JSON.parse(body); } catch (e) { return null; }
+        if (Array.isArray(json)) return json.find(x => x && typeof x === 'object') || null;
+        return json;
+    }
 
-        // Winna uses 0-indexed tiles (0-39), need to convert to 1-40
-        const rawDrawn = response.data.tiles || [];
-        const rawSelected = response.data.user_tiles || [];
+    // Unwrap a Winna bet payload. The HTTP /keno/play response carries the bet at
+    // the root; the WebSocket message wraps the same object in a `game` envelope.
+    function unwrapWinnaBet(payload) {
+        if (!payload) return null;
+        if (payload.data && payload.data.tiles) return payload;
+        if (payload.game && payload.game.data && payload.game.data.tiles) return payload.game;
+        return null;
+    }
+
+    // Winna reports tiles 0-indexed (0-39), so +1 maps them onto the board's 1-40
+    // labels. If a round ever shows every number off by one in the overlay, this
+    // is the single knob: set it to 0.
+    //
+    // A sampled payload can decide it on its own — a 0 can only appear in a
+    // 0-indexed feed and a 40 can only appear in a 1-indexed one — so trust that
+    // when it's present and fall back to the constant when it isn't. Mixing
+    // offsets across rounds would corrupt the stats, so the evidence has to be
+    // conclusive before it overrides.
+    const WINNA_TILE_OFFSET = 1;
+    function winnaTileOffset(values) {
+        if (values.includes(0)) return 1;    // 0-indexed feed
+        if (values.includes(40)) return 0;   // 1-indexed feed
+        return WINNA_TILE_OFFSET;
+    }
+
+    function transformWinnaKenoData(payload) {
+        const response = unwrapWinnaBet(payload);
+        if (!response) return null;
+
+        const rawDrawn = (response.data.tiles || []).map(n => parseInt(n, 10));
+        const rawSelected = (response.data.user_tiles || []).map(n => parseInt(n, 10));
+        const offset = winnaTileOffset(rawDrawn.concat(rawSelected).filter(n => !isNaN(n)));
 
         const transformed = {
             id: response.id || `keno-${Date.now()}`,
@@ -296,16 +378,16 @@
             amount: parseFloat(response.wager) || 0,
             currency: response.currency?.toLowerCase() || response.coin?.toLowerCase() || 'usd',
             state: {
-                // Convert from 0-indexed (0-39) to 1-indexed (1-40)
-                drawnNumbers: rawDrawn.map(num => parseInt(num, 10) + 1)
+                drawnNumbers: rawDrawn.map(num => num + offset)
                     .filter(num => !isNaN(num) && num >= 1 && num <= 40),
-                selectedNumbers: rawSelected.map(num => parseInt(num, 10) + 1)
+                selectedNumbers: rawSelected.map(num => num + offset)
                     .filter(num => !isNaN(num) && num >= 1 && num <= 40),
                 risk: response.data.risk || response.type || 'classic'
             },
             timestamp: new Date().toISOString()
         };
 
+        log('Winna raw tiles:', rawDrawn, '→ offset', offset, '→ drawn', transformed.state.drawnNumbers);
         log('Transformed Winna Keno data:', transformed);
         return transformed;
     }
@@ -415,7 +497,7 @@
         if (requestData) {
             try {
                 const requestBody = JSON.parse(requestData);
-                betAmount = parseFloat(requestBody.amount) || 0;
+                betAmount = parseFloat(requestBody.amount ?? requestBody.bet_amount ?? requestBody.betAmount) || 0;
             } catch (e) {
                 log('Could not parse Rainbet request data for amount');
             }
@@ -424,6 +506,13 @@
         // Response is nested: { game_result: {...}, keno_result: {...} }
         const gameResult = response.game_result || response;
         const kenoResult = response.keno_result || response;
+
+        // The request capture can miss (or name the field differently) — the
+        // response's game_result carries bet_amount itself, so fall back to it.
+        // Without this every Rainbet bet stored amount 0 and P/L showed "—".
+        if (!betAmount) {
+            betAmount = parseFloat(gameResult.bet_amount ?? response.bet_amount) || 0;
+        }
 
         const rawDrawn = kenoResult.drawn_numbers || kenoResult.drawnNumbers || [];
         const rawSelected = kenoResult.selected_numbers || kenoResult.selectedNumbers || [];
@@ -829,10 +918,17 @@
                     const dataStr = event.data;
                     if (typeof dataStr !== 'string') return;
 
-                    const parsed = JSON.parse(dataStr);
+                    const parsed = parseWinnaSocketFrame(dataStr);
+                    if (!parsed) return;
 
-                    // Only process complete response (has wager) to avoid duplicates
-                    if (parsed.game && parsed.game.data && parsed.game.data.tiles && parsed.game.wager) {
+                    // Only process the settled message (it carries `wager`). An
+                    // in-progress message can already have tiles; capturing it
+                    // would store multiplier 0 and the real result would then be
+                    // dropped by the background's dedupe-by-id.
+                    // Test for the FIELD, not a truthy value — a settled round can
+                    // legitimately report wager 0, and `bet.wager` would drop it.
+                    const bet = unwrapWinnaBet(parsed);
+                    if (bet && bet.wager !== undefined) {
                         log('📥 Winna Keno WebSocket message:', parsed);
                         const transformedData = transformWinnaKenoData(parsed);
                         if (transformedData) {

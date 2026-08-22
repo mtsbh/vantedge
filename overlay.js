@@ -145,6 +145,7 @@
             this.data = {
                 kenoStats: {
                     totalBets: 0,
+                    lifetimeBets: 0,
                     hotNumbers: new Array(this.numberCount).fill(0),
                     lastDrawn: [],
                     perNumberStats: Array.from({ length: this.numberCount }, () => ({
@@ -383,11 +384,16 @@
                 return;
             }
 
-            browserAPI.storage.local.get(['kenoResults', 'lastDrawnNumbers'], (result) => {
+            browserAPI.storage.local.get(['kenoResults', 'lastDrawnNumbers', 'kenoTotalBets'], (result) => {
                 if (browserAPI.runtime?.lastError) {
                     console.error('Error loading data from storage:', browserAPI.runtime.lastError.message);
                     return;
                 }
+                // Lifetime counter from the background (survives the 1500-entry
+                // history cap). Read before processKenoData so the first render
+                // already shows it.
+                this.data.kenoStats.lifetimeBets =
+                    result?.kenoTotalBets?.[`${this.storageOrigin}-keno-session`] ?? 0;
                 this.processKenoData(result?.kenoResults);
                 if (result?.lastDrawnNumbers) {
                     this.data.kenoStats.lastDrawn = result.lastDrawnNumbers;
@@ -403,7 +409,12 @@
                 const debounceTime = window.location.href.includes('rainbet.com') ? 600 : 500;
 
                 const debouncedListener = this.debounce((changes, area) => {
-                    if (area === 'local' && changes.kenoResults) {
+                    if (area !== 'local') return;
+                    if (changes.kenoTotalBets) {
+                        this.data.kenoStats.lifetimeBets =
+                            changes.kenoTotalBets.newValue?.[`${this.storageOrigin}-keno-session`] ?? 0;
+                    }
+                    if (changes.kenoResults) {
                         this.processKenoData(changes.kenoResults.newValue);
                     }
                 }, debounceTime);
@@ -476,6 +487,10 @@
 
             // Reset stats — reuse existing arrays/objects to avoid GC pressure on every draw.
             this.data.kenoStats.totalBets = siteSpecificResults.length;
+            // Window actually analyzed (≤ MAX_ANALYSIS). Anything comparing the
+            // windowed counts against an expectation MUST use this, not totalBets —
+            // mixing them made Hot/Cold saturate once bets passed the window size.
+            this.data.kenoStats.analyzedGames = numGames;
             const hotNumbers = this.data.kenoStats.hotNumbers;
             const perNumberStats = this.data.kenoStats.perNumberStats;
             for (let i = 0; i < N; i++) {
@@ -560,7 +575,16 @@
 
         updateUI() {
             this.updateStatusBar();
+            this.updateStrategyPLBadges();
             this.renderInsights();
+        }
+
+        // What the header/tile "Bets" shows: the lifetime count when the
+        // background has one (it keeps climbing past the 1500-entry history
+        // cap), else the buffer length. Analysis code keeps using totalBets.
+        displayBetCount() {
+            const s = this.data.kenoStats;
+            return Math.max(s.lifetimeBets || 0, s.totalBets || 0);
         }
 
         // Cheap, runs on every settled bet so P/L / bets / momentum stay instant.
@@ -568,7 +592,7 @@
             safe(() => {
                 const totalBetsEl = this.overlay.querySelector('#overlay-total-bets');
                 if (totalBetsEl) {
-                    totalBetsEl.textContent = this.data.kenoStats.totalBets;
+                    totalBetsEl.textContent = this.displayBetCount().toLocaleString();
                 }
                 // Momentum is shared by the status strip and the heatmap arrows;
                 // compute once per refresh and cache.
@@ -692,7 +716,12 @@
             const counts = this.data.kenoStats.hotNumbers;
             const bets = this.data.kenoStats.totalBets;
             if (!bets) return { hot: 0, cold: 0, expected: 0 };
-            const expected = bets * ((this._drawnPerGame || 10) / N);
+            // Expected draws per number over the SAME window the counts were
+            // built from (last ≤1000 games) — using totalBets here inflated
+            // expected past what windowed counts can reach, pinning Hot at 0
+            // and saturating Cold once a session passed 1000 bets.
+            const windowGames = this.data.kenoStats.analyzedGames || Math.min(bets, 1000);
+            const expected = windowGames * ((this._drawnPerGame || 10) / N);
             let hot = 0, cold = 0;
             for (let i = 0; i < N; i++) {
                 if (counts[i] > expected * 1.15) hot++;
@@ -708,6 +737,56 @@
             const stats = VantedgeMoney.summarize(this._validBets || []); // settled bets only
             this._paidBetCount = stats.paid;
             return stats;
+        }
+
+        // Per-strategy session P/L over the tracked bets, same units as
+        // sessionPL(): Σ(multiplier − 1) per paid bet, grouped by the strategy
+        // tag the background attached to each bet (activeStrategy/strategyUsed).
+        // Untagged bets (manual picks) simply don't appear here.
+        computeStrategyPL() {
+            const all = this._validBets || [];
+            if (this._stratPLCache && this._stratPLCache.ref === all) return this._stratPLCache.map;
+            const map = {};
+            for (let i = 0; i < all.length; i++) {
+                const b = all[i];
+                const id = b?.activeStrategy || b?.strategyUsed;
+                if (!id) continue;
+                const m = map[id] || (map[id] = { plays: 0, paid: 0, pl: 0, best: 0 });
+                m.plays++;
+                const mult = Number(b?.payoutMultiplier) || 0;
+                if (mult > m.best) m.best = mult;
+                if ((Number(b?.amount) || 0) > 0) { m.paid++; m.pl += mult - 1; }
+            }
+            this._stratPLCache = { ref: all, map };
+            return map;
+        }
+
+        // Small P/L number under each strategy tile (Core grid, Alt grid and the
+        // side drawer) — the Smart Picker statline treatment, per strategy. Only
+        // appears once a strategy has settled paid bets this session.
+        updateStrategyPLBadges() {
+            safe(() => {
+                const map = this.computeStrategyPL();
+                const items = [
+                    ...(this.overlay?.querySelectorAll('.action-item') || []),
+                    ...document.querySelectorAll('#overlay-side-actions .action-item')
+                ];
+                items.forEach(item => {
+                    const id = item.dataset.strategyId;
+                    const s = id && map[id];
+                    let el = item.querySelector('.vx-spl');
+                    if (!s || !s.paid) { if (el) el.remove(); return; }
+                    if (!el) {
+                        el = document.createElement('span');
+                        el.className = 'vx-spl';
+                        item.appendChild(el);
+                    }
+                    el.textContent = this.plFmt(s.pl);
+                    el.classList.toggle('pos', s.pl > 0.05);
+                    el.classList.toggle('neg', s.pl < -0.05);
+                    el.title = `${this.getStrategyName(id)} — session P/L ${this.plFmt(s.pl)} over ${s.paid} paid bets (${s.plays} plays, best ${s.best.toFixed(1)}x)`;
+                });
+            });
         }
 
         updateStatusStrip() {
@@ -955,6 +1034,13 @@
         }
 
         _hotGroupsShell(sizePills, tabs, favOnly) {
+            // Honest yardstick for the gap colors: how often a group of this size
+            // fully hits by pure chance (hypergeometric). "Overdue" = past 1.5x this.
+            const size = this.hotGroupSize || 4;
+            const exp = this.expectedGroupGap(size);
+            const expHint = isFinite(exp)
+                ? `<div class="vx-gexp" title="A ${size}-number group fully hits about once per ${Math.round(exp).toLocaleString()} draws by pure chance. Gap colors compare each group's current gap to this: yellow from 0.8x, amber glow past 1.5x.">${size}-groups hit ~1 in ${Math.round(exp).toLocaleString()} draws</div>`
+                : '';
             return `
                 <div class="vx-combos-head">
                     <span class="vx-section-title">Hot groups</span>
@@ -963,7 +1049,7 @@
                     </button>
                 </div>
                 <div class="vx-gsizes">${sizePills}</div>
-                <div class="vx-gtabs">${tabs}</div>`;
+                <div class="vx-gtabs">${tabs}</div>${expHint}`;
         }
 
         wireHotCombos() {
@@ -1113,7 +1199,7 @@
             let combos = Object.values(map);
             if (!combos.length) {
                 el.innerHTML = `<div class="vx-combos-head"><span class="vx-section-title">Combo history</span></div>
-                    <div class="vx-combos-empty">No combos played yet on this seed.</div>`;
+                    <div class="vx-combos-empty">No combos played yet on this site.</div>`;
                 return;
             }
             // Most recently played first, cap to 8.
@@ -1133,7 +1219,7 @@
                                 <span class="vx-gnums">${m.numbers.join('-')}</span>
                                 <span class="vx-chpl ${plCls}" title="${plTitle}">${m.paid ? this.plFmt(m.pl, m.cur, { mixed: m.mixed, compact: true }) : '—'}</span>
                             </div>
-                            <div class="vx-chsub">best <span class="vx-chbest" title="Top multipliers — click to expand">${m.best.toFixed(1)}x</span> · avg ${m.avg.toFixed(1)}x · ${m.plays} plays · gap ${gapText}</div>
+                            <div class="vx-chsub">best <span class="vx-chbest" title="Top multipliers — click to expand${m.bestCount > 1 ? ` (best landed ${m.bestCount}×)` : ''}">${m.best.toFixed(1)}x${bestSup}</span> · avg ${m.avg.toFixed(1)}x · ${m.plays} plays · gap <span class="vx-chgap ${gapState}" title="${gapTip}">${gapText}${gapSup}</span></div>
                             <div class="vx-chdetail" hidden></div>
                         </div>`;
             }).join('');
@@ -2068,7 +2154,9 @@
             ];
 
             // Reset a stale saved layout (if the curated set changed) before loading.
-            this.ensureLayoutVersion().then(() => this.loadStrategyOrder()).then(savedOrder => {
+            this.ensureLayoutVersion()
+                .then(() => Promise.all([this.loadStrategyOrder(), this.loadAltOrder()]))
+                .then(([savedOrder, savedAltOrder]) => {
                 let portfolio = defaultPortfolio;
                 const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
 
@@ -2085,11 +2173,14 @@
 
                 // Cache the core portfolio and derive the alternative set (drawer
                 // defaults minus anything already on the core grid), then render the
-                // active view and wire the Core/Alternative toggle.
+                // active view and wire the Core/Alternative toggle. The Alt grid has
+                // its own saved order (altStrategyOrder) so it can be sorted
+                // independently of the Core grid's strategyOrder.
                 this._mainPortfolio = portfolio;
                 const mainIds = new Set(portfolio.map(s => s.id));
-                this._altPortfolio = this.SIDE_DRAWER_DEFAULTS
+                const altSet = this.SIDE_DRAWER_DEFAULTS
                     .filter(s => !mainIds.has(s.id) && this.getSelectMethodName(s.id));
+                this._altPortfolio = this.applySavedOrder(altSet, savedAltOrder);
                 this.renderActiveStrategyView();
                 this.wireStratToggle();
             });
@@ -2116,31 +2207,126 @@
             else this.renderMainGrid(this._mainPortfolio || []);
         }
 
-        // Alternative strategies rendered into the main grid area — click-to-apply
-        // only (no drag/reorder, so the core strategyOrder is never disturbed).
+        // Alternative strategies rendered into the main grid area. Click applies the
+        // strategy; drag swaps two Alt tiles (persisted to altStrategyOrder, which is
+        // separate from the Core grid's strategyOrder so neither disturbs the other).
         renderAltGrid(portfolio) {
             const grid = this.overlay.querySelector('#overlay-quick-actions');
             if (!grid) return;
-            grid.innerHTML = portfolio.map(s => `
-                <div class="action-item" id="overlay-select-${s.id}" data-strategy-id="${s.id}" data-source="alt-grid">
+            grid.innerHTML = portfolio.map((s, index) => `
+                <div class="action-item"
+                     id="overlay-select-${s.id}"
+                     draggable="true"
+                     data-strategy-id="${s.id}"
+                     data-source="alt-grid"
+                     data-index="${index}">
                     <button class="action-btn-lg" data-action="${s.id}">
                         ${this.getStrategyIcon(s.id)}
                     </button>
                     <span class="action-label">${this.getStrategyName(s.id)}</span>
                 </div>
             `).join('');
-            grid.querySelectorAll('.action-item').forEach(item => {
+            this.setupAltGridInteractions();
+            // Re-apply the AI gold-glow if its pick lives in this view.
+            safe(() => this.updateAIRecommendation());
+            this.updateStrategyPLBadges();
+        }
+
+        // Click + drag-to-swap for the Alt grid. Mirrors setupStrategyInteractions
+        // but routes drops to swapAltStrategies so strategyOrder is never touched.
+        setupAltGridInteractions() {
+            const grid = this.overlay.querySelector('#overlay-quick-actions');
+            if (!grid) return;
+
+            const items = grid.querySelectorAll('.action-item');
+
+            items.forEach(item => {
                 const id = item.dataset.strategyId;
+
                 item.addEventListener('click', () => {
+                    // A finished drag fires a click on the source tile — ignore it.
+                    if (this._suppressClick) { this._suppressClick = false; return; }
                     this.setActiveButton(id);
                     const method = this.getSelectMethodName(id);
                     if (method && typeof this[method] === 'function') this[method]();
                     const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
                     browserAPI?.runtime?.sendMessage?.({ type: 'SET_ACTIVE_STRATEGY', strategy: id, origin: this.storageOrigin })?.catch?.(() => {});
                 });
+
+                item.addEventListener('dragstart', (e) => {
+                    this.dragSource = item;
+                    item.classList.add('dragging');
+                    this._suppressClick = true;
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', id || '');
+                });
+
+                item.addEventListener('dragend', () => {
+                    item.classList.remove('dragging');
+                    this.overlay.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+                    this.dragSource = null;
+                    setTimeout(() => { this._suppressClick = false; }, 150);
+                });
+
+                item.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    if (this.dragSource && this.dragSource !== item) {
+                        items.forEach(i => i.classList.remove('drag-over'));
+                        item.classList.add('drag-over');
+                    }
+                });
+
+                item.addEventListener('dragleave', () => {
+                    item.classList.remove('drag-over');
+                });
+
+                item.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (this.dragSource && this.dragSource !== item) {
+                        this.swapAltStrategies(this.dragSource, item);
+                    }
+                    item.classList.remove('drag-over');
+                });
             });
-            // Re-apply the AI gold-glow if its pick lives in this view.
-            safe(() => this.updateAIRecommendation());
+        }
+
+        // True swap of two Alt-grid tiles. Persists altStrategyOrder and re-renders.
+        swapAltStrategies(draggedItem, targetItem) {
+            const draggedId = draggedItem.dataset.strategyId;
+            const targetId = targetItem.dataset.strategyId;
+            if (!draggedId || !targetId || draggedId === targetId) return;
+            // Ignore drags that originated outside this view (e.g. a stale dragSource).
+            if (draggedItem.dataset.source !== 'alt-grid' || targetItem.dataset.source !== 'alt-grid') return;
+
+            const alt = (this._altPortfolio || []).slice();
+            const di = alt.findIndex(s => s.id === draggedId);
+            const ti = alt.findIndex(s => s.id === targetId);
+            if (di < 0 || ti < 0) return;
+            // Exchange the two tiles only (not a reorder that shifts everything).
+            [alt[di], alt[ti]] = [alt[ti], alt[di]];
+            this._altPortfolio = alt;
+
+            const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
+            const persist = browserAPI?.storage?.local
+                ? browserAPI.storage.local.set({ altStrategyOrder: alt.map(s => s.id) })
+                : Promise.resolve();
+            Promise.resolve(persist).catch(err => console.error('Vantedge: alt swap persist failed', err));
+            this.renderAltGrid(alt);
+        }
+
+        // Reorder a derived strategy list to match a saved id order. Unknown/removed
+        // ids in the saved order are skipped and new strategies are appended, so the
+        // saved order survives changes to the curated set.
+        applySavedOrder(list, savedOrder) {
+            if (!Array.isArray(savedOrder) || savedOrder.length === 0) return list;
+            const byId = new Map(list.map(s => [s.id, s]));
+            const ordered = [];
+            savedOrder.forEach(id => {
+                if (byId.has(id)) { ordered.push(byId.get(id)); byId.delete(id); }
+            });
+            return ordered.concat(list.filter(s => byId.has(s.id)));
         }
 
         renderMainGrid(portfolio) {
@@ -2160,6 +2346,7 @@
                 </div>
             `).join('');
             this.setupStrategyInteractions();
+            this.updateStrategyPLBadges();
         }
 
         getStrategyName(id) {
@@ -2172,6 +2359,18 @@
                 browserAPI.storage.local.get('strategyOrder', result => {
                     resolve(result.strategyOrder || null);
                 });
+            });
+        }
+
+        // Saved order for the Alternative grid. Handles both Chrome (callback) and
+        // Firefox (promise-only) storage APIs; never rejects.
+        async loadAltOrder() {
+            const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
+            if (!browserAPI?.storage?.local) return null;
+            return new Promise(resolve => {
+                const done = (result) => resolve((result && result.altStrategyOrder) || null);
+                const p = browserAPI.storage.local.get('altStrategyOrder', done);
+                if (p && typeof p.then === 'function') p.then(done, () => resolve(null));
             });
         }
 
@@ -2190,7 +2389,7 @@
                         const p = browserAPI.storage.local.set({ strategyLayoutVersion: this.LAYOUT_VERSION }, afterSet);
                         if (p && typeof p.then === 'function') p.then(afterSet, afterSet);
                     };
-                    const pr = browserAPI.storage.local.remove(['strategyOrder', 'sideDrawerStrategies'], afterRemove);
+                    const pr = browserAPI.storage.local.remove(['strategyOrder', 'sideDrawerStrategies', 'altStrategyOrder'], afterRemove);
                     if (pr && typeof pr.then === 'function') pr.then(afterRemove, afterRemove);
                 };
                 const pg = browserAPI.storage.local.get('strategyLayoutVersion', onGet);
@@ -2206,6 +2405,9 @@
                         this.position = result.overlayPosition;
                         this.overlay.style.left = this.position.x + 'px';
                         this.overlay.style.top = this.position.y + 'px';
+                        // A position saved on a bigger screen can be entirely
+                        // off-screen here (e.g. desktop 1440px → tablet 800px).
+                        this.clampToViewport();
                     }
                     resolve(result.overlayPosition || null);
                     // Re-position the side drawer tab now that the overlay's final
@@ -2465,6 +2667,9 @@
             const draggedId = draggedItem.dataset.strategyId;
             const targetId = targetItem.dataset.strategyId;
             if (!draggedId || !targetId || draggedId === targetId) return;
+            // Never let an Alt-view drag write to strategyOrder — both grids share
+            // the #overlay-quick-actions container, so the source must be checked.
+            if (draggedItem.dataset.source === 'alt-grid' || targetItem.dataset.source === 'alt-grid') return;
 
             const mainGrid = this.overlay.querySelector('#overlay-quick-actions');
             if (!mainGrid) return;
@@ -2833,6 +3038,7 @@
                    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
                    cursor: move;
                    user-select: none;
+                   touch-action: none;
                }
 
                .overlay-title {
@@ -3012,6 +3218,17 @@
                     transition: all 0.2s ease;
                 }
 
+                /* Tiny per-strategy session P/L under the tile label */
+                .vx-spl {
+                    font-size: 8px;
+                    font-weight: 600;
+                    line-height: 1;
+                    color: #8a97a8;
+                    letter-spacing: 0.2px;
+                }
+                .vx-spl.pos { color: #3fb950; }
+                .vx-spl.neg { color: #e5534b; }
+
                 .action-item.dragging {
                     opacity: 0.4;
                     cursor: grabbing;
@@ -3097,50 +3314,67 @@
                 .action-label.regime-cold { color: #4fc3f7 !important; }
                 .action-label.regime-neutral { color: #aaa !important; }
 
-                /* MOBILE VERSION */
+                /* MOBILE / TABLET */
 
-                @media (max-width: 600px) {
-                    #geminyzer-overlay {
-                        width: 100%;
-                        height: auto;
-                        min-height: 0;
-                        max-height: 50vh;
-                        left: 0;
-                        top: auto;
-                        bottom: 0;
+                /* Touch devices: comfortable tap targets */
+                @media (pointer: coarse) {
+                    .overlay-controls button { width: 34px; height: 34px; }
+                    .overlay-controls { gap: 6px; }
+                    .heatmap-number { font-size: 12px; }
+                }
+
+                /* Phones + small tablets: both layout modes collapse into a
+                   bottom sheet — there is no room to float or dock beside the
+                   game board. Position rules use !important so they beat both
+                   drag-set inline styles and the sidebar-mode dock rules. */
+                @media (max-width: 700px) {
+                    #geminyzer-overlay,
+                    #geminyzer-overlay.sidebar-mode {
+                        top: auto !important;
+                        left: 0 !important;
+                        right: 0 !important;
+                        bottom: 0 !important;
+                        width: 100% !important;
+                        height: auto !important;
+                        min-height: 0 !important;
+                        max-height: 60vh !important;
                         border-radius: 12px 12px 0 0;
-                        border-width: 2px 2px 0 2px;
+                        border-left: none;
+                        border-right: none;
+                        border-bottom: none;
+                        border-top: 1px solid rgba(255, 255, 255, 0.10);
                         box-sizing: border-box;
+                        overflow: hidden;
+                    }
+                    #geminyzer-overlay.hidden {
+                        transform: translateY(110%);
+                    }
+                    #geminyzer-overlay.minimized,
+                    #geminyzer-overlay.sidebar-mode.minimized {
+                        height: 50px !important;
+                        min-height: 50px !important;
+                        overflow: hidden;
                     }
 
-                    .overlay-content {
-                        padding: 10px 10px 15px 10px;
-                        max-height: none;
-                        overflow-y: hidden;
+                    #geminyzer-overlay .overlay-content,
+                    #geminyzer-overlay.sidebar-mode .overlay-content {
+                        max-height: calc(60vh - 54px);
+                        overflow-y: auto;
+                        -webkit-overflow-scrolling: touch;
+                        padding: 10px 10px calc(12px + env(safe-area-inset-bottom, 0px)) 10px;
                     }
 
-                   /* --- HIDE THE GRID ON MOBILE --- */
-                   .keno-heatmap-grid, .mobile-heatmap-grid {
-                       display: none;
-                   }
+                    /* Bottom sheet is fixed in place — no dragging */
+                    .overlay-header { cursor: default; }
+                    .overlay-stats { display: none; }
 
-                    /* --- ARRANGE THE BUTTONS --- */
-                   .quick-actions-grid {
-                       display: grid;
-                       grid-template-columns: repeat(4, 1fr);
-                       gap: 4px;
-                   }
+                    .quick-actions-grid { gap: 4px; }
+                    .action-btn-lg { font-size: 12px; padding: 6px 2px; }
+                    .action-label { font-size: 8px; }
 
-                   .action-btn-lg {
-                       font-size: 12px;
-                       padding: 5px 2px;
-                   }
-
-                   .action-label {
-                       font-size: 8px;
-                   }
-               }
-           }
+                    /* No room for the side drawer next to a full-width sheet */
+                    #overlay-drawer-tab, #overlay-side-drawer { display: none !important; }
+                }
 
            /* --- Side drawer — fixed siblings of overlay (Firefox backdrop-filter fix) --- */
            #overlay-drawer-tab {
@@ -3409,6 +3643,17 @@
            .vx-gcell.gap.now { color: #3fb950; }
            .vx-gcell.gap.due { color: #d6a700; }
            .vx-gcell.gap.overdue { color: #e0913a; font-weight: 600; text-shadow: 0 0 6px rgba(224, 145, 58, 0.85); }
+           /* Combo History gap uses the same states as Hot Groups gap */
+           .vx-chgap.now { color: #3fb950; }
+           .vx-chgap.due { color: #d6a700; }
+           .vx-chgap.overdue { color: #e0913a; font-weight: 600; text-shadow: 0 0 6px rgba(224, 145, 58, 0.85); }
+           .vx-chsub sup, .vx-chmx sup { font-size: 8px; opacity: 0.75; }
+           .vx-gexp {
+               font-size: 9px;
+               color: #6e7681;
+               text-align: right;
+               padding: 2px 2px 0;
+           }
            .vx-gtrend { display: inline-flex; vertical-align: middle; margin-right: 3px; }
            .vx-gtrend:empty { display: none; }
            .vx-combo-star {
@@ -3748,7 +3993,7 @@
                         this.toggleSideDrawer();
                     });
                 }
-                if (header) header.addEventListener('mousedown', (e) => this.startDrag(e));
+                if (header) header.addEventListener('pointerdown', (e) => this.startDrag(e));
                 // Click the AI status badge to apply whatever it recommends.
                 const enh = this.overlay.querySelector('#enhancement-status');
                 if (enh) {
@@ -4201,7 +4446,7 @@
                 const cached = this.heatmapCells[i];
 
                 cached.countSpan.textContent = occurrences;
-                cached.cell.title = `#${i + 1} · heat ${heatScores[i + 1]}/100 · drawn ${occurrences}×`;
+                cached.cell.title = `#${i + 1} · heat ${heatScores[i + 1]}/100 · drawn ${occurrences}× in last 1000`;
 
                 if (cached.momSlot) {
                     const state = this._momentum ? this._momentum[i + 1] : 'flat';
@@ -4367,30 +4612,172 @@
             }, 200);
         }
 
-        // Winna's game only accepts trusted clicks, so we can't auto-pick. Instead
-        // we tell the in-iframe bridge to visually highlight the recommended numbers
-        // for the user to tap. (Do not expect the board selection to change here.)
+        // Map board number -> <button>. The board now renders in the same document
+        // as the overlay (winna.com/game/originals/keno). Markup is
+        // `<button class="field-button ..."><div class="field-button__surface">
+        // <span>32</span></div></button>`, so match the button class and read the
+        // nested text. Falls back to "any button whose whole label is 1-40" so a
+        // class rename doesn't kill this again.
+        findWinnaBoardButtons() {
+            const num = (b) => {
+                const t = (b.textContent || '').trim();
+                return /^\d{1,2}$/.test(t) ? parseInt(t, 10) : NaN;
+            };
+            // Our own UI lives in this document too and is full of 1-40 labelled
+            // buttons (Hot Groups sizes, Smart Picker). Never treat those as board
+            // tiles — doing so is what made a strategy click light up the sidebar.
+            const OURS = '#geminyzer-overlay, #overlay-side-drawer, #overlay-drawer-tab';
+            const notOurs = (b) => !b.closest(OURS);
+
+            // querySelectorAll does not pierce shadow roots, so walk them too —
+            // otherwise a shadow-rendered board looks identical to "no board here".
+            const deep = (selector) => {
+                const out = [];
+                const walk = (root) => {
+                    out.push(...root.querySelectorAll(selector));
+                    root.querySelectorAll('*').forEach(el => { if (el.shadowRoot) walk(el.shadowRoot); });
+                };
+                walk(document);
+                return out;
+            };
+
+            const collect = (list) => {
+                const map = new Map();
+                list.filter(notOurs).forEach(b => {
+                    const n = num(b);
+                    if (n >= 1 && n <= 40 && !map.has(n)) map.set(n, b);
+                });
+                return map;
+            };
+
+            let map = collect(deep('.keno-field button'));
+            if (map.size === 0) map = collect(deep('button.field-button'));
+            if (map.size === 0) {
+                // Last resort: scan every button. Only trust it if it looks like a
+                // real 40-tile board — a handful of numeric buttons is some other
+                // control (bet multipliers, pagination), not the keno grid.
+                const scanned = collect(deep('button'));
+                map = scanned.size >= 30 ? scanned : new Map();
+            }
+            return map;
+        }
+
+        ensureWinnaPickStyle() {
+            if (document.getElementById('vantedge-pick-style')) return;
+            const style = document.createElement('style');
+            style.id = 'vantedge-pick-style';
+            style.textContent = `
+                .vantedge-pick { position: relative; }
+                .vantedge-pick::after {
+                    content: ''; position: absolute; inset: -3px; border-radius: inherit;
+                    border: 2.5px solid #ffd54a; box-shadow: 0 0 10px 2px rgba(255, 213, 74, .85);
+                    pointer-events: none; animation: vantedgePulse 1.1s ease-in-out infinite; z-index: 5;
+                }
+                @keyframes vantedgePulse { 0%, 100% { opacity: .55 } 50% { opacity: 1 } }`;
+            (document.head || document.documentElement).appendChild(style);
+        }
+
+        // A fuller pointer sequence than clickElement: Vue binds real pointer
+        // events, and some handlers ignore a PointerEvent with no pointerId or
+        // button state. Kept Winna-local so other sites' click paths don't shift.
+        winnaClick(button) {
+            safe(() => {
+                const r = button.getBoundingClientRect();
+                const base = {
+                    bubbles: true, cancelable: true, composed: true, view: window,
+                    clientX: r.left + r.width / 2, clientY: r.top + r.height / 2,
+                    button: 0
+                };
+                const pointer = { ...base, pointerId: 1, isPrimary: true, pointerType: 'mouse', width: 1, height: 1 };
+                button.dispatchEvent(new PointerEvent('pointerover', pointer));
+                button.dispatchEvent(new PointerEvent('pointerenter', pointer));
+                button.dispatchEvent(new PointerEvent('pointerdown', { ...pointer, buttons: 1 }));
+                button.dispatchEvent(new MouseEvent('mousedown', { ...base, buttons: 1 }));
+                button.dispatchEvent(new PointerEvent('pointerup', pointer));
+                button.dispatchEvent(new MouseEvent('mouseup', base));
+                button.dispatchEvent(new MouseEvent('click', base));
+            });
+        }
+
+        // Apply the recommended numbers to Winna's board.
+        //
+        // The board lives in this document, so drive it here rather than through
+        // content.js's bridge — that indirection was the thing silently failing.
+        // Try a real click first; Winna's Vue handlers may ignore untrusted events,
+        // so anything that doesn't take gets a pulsing marker to tap manually.
         highlightWinnaNumbers(numbersArg = null) {
             const numbers = numbersArg || Array.from(this.data.selectedNumbers);
+            const buttons = this.findWinnaBoardButtons();
 
-            let iframe = document.querySelector('iframe[src*="games.winna.com"]');
-            if (!iframe) {
-                iframe = document.querySelector('iframe[src*="winna"]');
-            }
-            if (!iframe) {
-                const allIframes = document.querySelectorAll('iframe');
-                iframe = allIframes[0];
+            if (buttons.size === 0) {
+                // No board in this document — fall back to the iframe layout.
+                this.highlightWinnaIframe(numbers);
+                return;
             }
 
-            if (!iframe) return;
+            this.ensureWinnaPickStyle();
+            this._winnaWanted = numbers.slice();
 
-            iframe.contentWindow.postMessage({ type: 'WINNA_CLEAR_HIGHLIGHT' }, '*');
+            // Deselect anything picked that we don't want, then pick what we do.
+            buttons.forEach((button, n) => {
+                const selected = button.classList.contains('selected');
+                if (selected && !numbers.includes(n)) this.winnaClick(button);
+            });
+            numbers.forEach(n => {
+                const button = buttons.get(n);
+                if (button && !button.classList.contains('selected')) this.winnaClick(button);
+            });
 
+            // Whatever the clicks couldn't select gets marked for manual tapping.
+            setTimeout(() => this.markWinnaPicks(), 250);
+            this.startWinnaBoardObserver();
+        }
+
+        // Mark wanted-but-not-yet-selected numbers. Selected ones lose the marker,
+        // so the highlights drain away as you tap them.
+        markWinnaPicks() {
+            const wanted = this._winnaWanted || [];
+            this.findWinnaBoardButtons().forEach((button, n) => {
+                const mark = wanted.includes(n) && !button.classList.contains('selected');
+                button.classList.toggle('vantedge-pick', mark); // no-op when already correct
+            });
+        }
+
+        startWinnaBoardObserver() {
+            if (this._winnaObserver) return;
+            const board = document.querySelector('.keno-field')
+                || document.querySelector('button.field-button')?.parentElement;
+            if (!board) return;
+            let scheduled = false;
+            this._winnaObserver = new MutationObserver(() => {
+                if (scheduled || !(this._winnaWanted || []).length) return;
+                scheduled = true;
+                requestAnimationFrame(() => { scheduled = false; this.markWinnaPicks(); });
+            });
+            this._winnaObserver.observe(board, {
+                childList: true, subtree: true, attributes: true, attributeFilter: ['class']
+            });
+        }
+
+        // Legacy iframe layout (games.winna.com / originals.winna.com), handled by
+        // the bridge in content.js.
+        highlightWinnaIframe(numbers) {
+            const frames = Array.from(document.querySelectorAll('iframe'));
+            // Prefer a frame that names Winna, but the game frame's src can be
+            // opaque (blob:/about:blank, or a CDN host). Falling back to every
+            // frame is safe: the bridge in content.js only acts inside a winna.com
+            // frame, and unrelated widgets ignore an unknown message type.
+            const named = frames.filter(f => /winna|originals|games/i.test(f.src || ''));
+            const targets = (named.length ? named : frames).filter(f => f.contentWindow);
+
+            if (!targets.length) {
+                console.warn('Vantedge: Winna board not found — no 40-tile board in this document and no iframe to reach.');
+                return;
+            }
+
+            targets.forEach(f => f.contentWindow.postMessage({ type: 'WINNA_CLEAR_HIGHLIGHT' }, '*'));
             setTimeout(() => {
-                iframe.contentWindow.postMessage({
-                    type: 'WINNA_HIGHLIGHT_NUMBERS',
-                    numbers: numbers
-                }, '*');
+                targets.forEach(f => f.contentWindow.postMessage({ type: 'WINNA_HIGHLIGHT_NUMBERS', numbers }, '*'));
             }, 300);
         }
 
@@ -4472,20 +4859,24 @@
         }
 
         animateSequentialSelection(numbers) {
-            this.clearSelection();
             if (!numbers || numbers.length === 0) {
                 console.warn("Vantedge: A strategy returned no numbers to select.");
                 return;
             }
 
-            this.syncSelectionUI(numbers);
-
             const site = this.getCurrentSite();
 
+            // Winna deselects per-button inside highlightWinnaNumbers. Routing it
+            // through clearSelection() would click "Clear Table", and Vue applies
+            // that on its own tick — potentially wiping the picks we just made.
             if (site === 'winna') {
+                this.syncSelectionUI(numbers);
                 this.highlightWinnaNumbers(numbers);
                 return;
             }
+
+            this.clearSelection();
+            this.syncSelectionUI(numbers);
 
             const kenoButtons = this.findKenoNumbers();
             if (!kenoButtons || kenoButtons.length === 0) return;
@@ -4517,7 +4908,8 @@
                 const wasSelected = cell ? cell.classList.contains('selected') : false;
 
                 if (site === 'winna') {
-                    // Winna rejects synthetic clicks; maintain a manual highlight set.
+                    // Track the set here; highlightWinnaNumbers tries to click the
+                    // board and marks whatever the click couldn't select.
                     if (!this._winnaManual) this._winnaManual = new Set();
                     if (wasSelected) this._winnaManual.delete(n); else this._winnaManual.add(n);
                     if (cell) cell.classList.toggle('selected', !wasSelected);
@@ -6039,14 +6431,47 @@
             browserAPI?.storage?.local?.set({ layoutMode: this.layoutMode });
         }
 
+        // Below this width the panel renders as a bottom sheet (see the
+        // max-width:700px CSS block) — keep the JS breakpoint in sync with it.
+        isNarrowScreen() {
+            return window.innerWidth <= 700;
+        }
+
         pushPageForSidebar(on) {
             safe(() => {
                 const docEl = document.documentElement;
                 docEl.style.transition = 'margin-right 0.2s ease';
+                if (this.isNarrowScreen()) {
+                    // Bottom sheet: reserve scroll space below the page instead of
+                    // pushing it sideways (a side push would eat the whole screen).
+                    docEl.style.marginRight = '';
+                    const h = (on && this.overlay) ? this.overlay.offsetHeight : 0;
+                    docEl.style.marginBottom = h ? `${h}px` : '';
+                    return;
+                }
+                docEl.style.marginBottom = '';
                 // Measure the actual rendered sidebar width (it's responsive) so the
                 // reserved gap always matches — no over/under-push when resizing.
                 const w = (on && this.overlay) ? this.overlay.offsetWidth : 0;
                 docEl.style.marginRight = on ? `${w || GeminyzerOverlay.SIDEBAR_WIDTH}px` : '';
+            });
+        }
+
+        // Keep a floating overlay reachable: pull it back on-screen if the saved
+        // position (or a window resize) left it outside the viewport.
+        clampToViewport() {
+            safe(() => {
+                if (!this.overlay || this.layoutMode === 'sidebar' || this.isNarrowScreen()) return;
+                const w = this.overlay.offsetWidth || 400;
+                const h = this.overlay.offsetHeight || 450;
+                const x = Math.max(0, Math.min(window.innerWidth - Math.min(w, window.innerWidth), this.position?.x ?? 0));
+                const y = Math.max(0, Math.min(window.innerHeight - Math.min(h, window.innerHeight), this.position?.y ?? 0));
+                if (x !== this.position?.x || y !== this.position?.y) {
+                    this.position = { x, y };
+                    this.overlay.style.left = x + 'px';
+                    this.overlay.style.top = y + 'px';
+                    this.positionSideDrawer();
+                }
             });
         }
 
@@ -6056,7 +6481,10 @@
             if (this._sidebarResizeAdded) return;
             this._sidebarResizeAdded = true;
             const onResize = this.debounce(() => {
-                if (this.layoutMode === 'sidebar' && this.isVisible) this.pushPageForSidebar(true);
+                // Re-run in every mode: crossing the narrow-screen breakpoint has to
+                // swap the reserved gap between margin-right and margin-bottom.
+                this.pushPageForSidebar(this.layoutMode === 'sidebar' && this.isVisible);
+                this.clampToViewport();
             }, 150);
             window.addEventListener('resize', onResize);
         }
@@ -6079,6 +6507,9 @@
 
         startDrag(e) {
             if (this.layoutMode === 'sidebar') return;   // docked — not draggable
+            if (this.isNarrowScreen()) return;           // bottom sheet — fixed in place
+            if (e.button !== undefined && e.button !== 0) return;
+            if (e.target && e.target.closest('button')) return; // header buttons: tap, not drag
             e.preventDefault();
             this.isDragging = true;
             this.overlay.classList.add('dragging');
@@ -6091,8 +6522,9 @@
                 if (!this.isDragging) return;
                 e.preventDefault();
 
-                const newX = Math.max(0, Math.min(window.innerWidth - 380, e.clientX - offsetX));
-                const newY = Math.max(0, Math.min(window.innerHeight - 450, e.clientY - offsetY));
+                const w = this.overlay.offsetWidth || 380;
+                const newX = Math.max(0, Math.min(window.innerWidth - w, e.clientX - offsetX));
+                const newY = Math.max(0, Math.min(window.innerHeight - 50, e.clientY - offsetY));
 
                 this.overlay.style.left = newX + 'px';
                 this.overlay.style.top = newY + 'px';
@@ -6106,13 +6538,15 @@
             const stopDrag = () => {
                 this.isDragging = false;
                 this.overlay.classList.remove('dragging');
-                document.removeEventListener('mousemove', handleDrag);
-                document.removeEventListener('mouseup', stopDrag);
+                document.removeEventListener('pointermove', handleDrag);
+                document.removeEventListener('pointerup', stopDrag);
+                document.removeEventListener('pointercancel', stopDrag);
                 this.saveOverlayPosition();
             };
 
-            document.addEventListener('mousemove', handleDrag);
-            document.addEventListener('mouseup', stopDrag);
+            document.addEventListener('pointermove', handleDrag);
+            document.addEventListener('pointerup', stopDrag);
+            document.addEventListener('pointercancel', stopDrag);
         }
 
         toggleMinimize() {
@@ -6131,6 +6565,11 @@
                 if (drawer && this.isMinimized) drawer.classList.add('side-drawer-closed');
                 if (!this.isMinimized) {
                     setTimeout(() => this.positionSideDrawer(), 0);
+                }
+                // Bottom-sheet mode reserves page space equal to the sheet height —
+                // re-measure after the minimize/restore height change lands.
+                if (this.layoutMode === 'sidebar' && this.isNarrowScreen()) {
+                    setTimeout(() => this.pushPageForSidebar(this.isVisible), 50);
                 }
             });
         }
@@ -6235,6 +6674,7 @@
             this.data = {
                 kenoStats: {
                     totalBets: 0,
+                    lifetimeBets: 0,
                     hotNumbers: new Array(this.numberCount).fill(0),
                     lastDrawn: [],
                     perNumberStats: Array.from({ length: this.numberCount }, () => ({

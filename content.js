@@ -158,23 +158,100 @@ function isSupportedSite() {
 // from a content script can't pick numbers. Instead we visually mark the
 // recommended buttons and the user taps them. We must NOT postMessage to
 // window.parent (the winna.com shell logs "Unknown message type!" for it).
-if (window.location.hostname.includes('games.winna.com')) {
+// Installed on ANY Winna frame. The board used to live in a games.winna.com
+// iframe but is now rendered inline on https://winna.com/game/originals/keno, so
+// both layouts have to work:
+//   - iframe layout: the overlay (top frame) postMessages in, handled below;
+//   - inline layout: the overlay is in this same frame and calls
+//     window.__vantedgeWinna directly (content scripts of one extension share an
+//     isolated world, which is how content.js already reads window.geminyzerOverlay).
+if (window.location.hostname.includes('winna.com')) {
     let recommendedNumbers = [];
     let highlightObserver = null;
 
-    window.addEventListener('message', (event) => {
-        // Only accept messages from parent
-        if (event.source !== window.parent) return;
+    // Quiet by default. To trace which frame holds the board, run this in that
+    // frame's console and reload:  localStorage.vantedge_debug = '1'
+    // (guarded: localStorage throws in a sandboxed frame).
+    const VX_DEBUG = (() => {
+        try { return localStorage.getItem('vantedge_debug') === '1'; } catch (e) { return false; }
+    })();
 
-        if (event.data.type === 'WINNA_HIGHLIGHT_NUMBERS') {
-            recommendedNumbers = Array.isArray(event.data.numbers) ? event.data.numbers : [];
-            applyWinnaHighlights();
-            startWinnaHighlightObserver();
+    // Vue binds real pointer events, and handlers often ignore a PointerEvent
+    // with no pointerId/button state — so send the full sequence.
+    const winnaClick = (button) => {
+        try {
+            const r = button.getBoundingClientRect();
+            const base = {
+                bubbles: true, cancelable: true, composed: true, view: window,
+                clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, button: 0
+            };
+            const pointer = { ...base, pointerId: 1, isPrimary: true, pointerType: 'mouse', width: 1, height: 1 };
+            button.dispatchEvent(new PointerEvent('pointerover', pointer));
+            button.dispatchEvent(new PointerEvent('pointerenter', pointer));
+            button.dispatchEvent(new PointerEvent('pointerdown', { ...pointer, buttons: 1 }));
+            button.dispatchEvent(new MouseEvent('mousedown', { ...base, buttons: 1 }));
+            button.dispatchEvent(new PointerEvent('pointerup', pointer));
+            button.dispatchEvent(new MouseEvent('mouseup', base));
+            button.dispatchEvent(new MouseEvent('click', base));
+        } catch (e) { /* board mid-render */ }
+    };
+
+    const setWinnaHighlights = (numbers) => {
+        recommendedNumbers = Array.isArray(numbers) ? numbers : [];
+
+        // Try to actually select them first; whatever the click can't take
+        // (Winna may require trusted events) falls through to the marker.
+        const buttons = findWinnaButtons();
+        buttons.forEach((button, n) => {
+            const selected = button.classList.contains('selected');
+            if (selected && !recommendedNumbers.includes(n)) winnaClick(button);
+        });
+        recommendedNumbers.forEach(n => {
+            const button = buttons.get(n);
+            if (button && !button.classList.contains('selected')) winnaClick(button);
+        });
+
+        setTimeout(applyWinnaHighlights, 250);
+        startWinnaHighlightObserver();
+    };
+    const clearWinnaHighlights = () => {
+        recommendedNumbers = [];
+        applyWinnaHighlights();
+    };
+
+    // Direct API for the inline layout.
+    window.__vantedgeWinna = { highlight: setWinnaHighlights, clear: clearWinnaHighlights };
+
+    // Pass a message on to this frame's own child frames. The board can sit in a
+    // nested iframe, and postMessage only reaches direct children — so each frame
+    // relays downward. Messages never travel up, so this can't loop.
+    const relayToChildFrames = (message) => {
+        document.querySelectorAll('iframe').forEach(f => {
+            try { f.contentWindow?.postMessage(message, '*'); } catch (e) { /* opaque frame */ }
+        });
+    };
+
+    window.addEventListener('message', (event) => {
+        const type = event.data?.type;
+        if (type !== 'WINNA_HIGHLIGHT_NUMBERS' && type !== 'WINNA_CLEAR_HIGHLIGHT') return;
+
+        // Deliberately NOT checking event.source against window.parent. The game
+        // frame is sandboxed (opaque origin) and may be nested, both of which can
+        // make that comparison fail; these message types are ours alone, so the
+        // type check is the gate.
+        relayToChildFrames(event.data);
+
+        if (type === 'WINNA_HIGHLIGHT_NUMBERS') {
+            const wanted = Array.isArray(event.data.numbers) ? event.data.numbers : [];
+            const found = findWinnaButtons().size;
+            // Frame URL included: with several frames answering, this is the only
+            // way to tell which one actually holds the board.
+            if (VX_DEBUG) console.log(`Vantedge: Winna bridge [${location.href}] received ${wanted.length} number(s); board tiles found: ${found}`);
+            if (found > 0) setWinnaHighlights(wanted);
         }
 
-        if (event.data.type === 'WINNA_CLEAR_HIGHLIGHT') {
-            recommendedNumbers = [];
-            applyWinnaHighlights();
+        if (type === 'WINNA_CLEAR_HIGHLIGHT') {
+            clearWinnaHighlights();
         }
     });
 
@@ -201,16 +278,67 @@ if (window.location.hostname.includes('games.winna.com')) {
         (document.head || document.documentElement).appendChild(style);
     }
 
-    // Map number -> button. The board is `.keno-field > button` where the
-    // number text lives in a nested span, so read each button's textContent.
+    // The board container has been `.keno-field`; the current markup is
+    // `<button class="field-button ..."><div class="field-button__surface">
+    // <span>32</span></div></button>`, so fall back to the button class itself.
+    function findWinnaBoard() {
+        return document.querySelector('.keno-field')
+            || document.querySelector('button.field-button')?.closest('div, section, main')
+            || document.body;
+    }
+
+    // Map number -> button. The number text lives in a nested span, so read each
+    // button's textContent rather than a direct child node.
     function findWinnaButtons() {
-        const container = document.querySelector('.keno-field');
-        const map = new Map();
-        if (!container) return map;
-        container.querySelectorAll('button').forEach(button => {
-            const num = parseInt(button.textContent?.trim(), 10);
-            if (!isNaN(num) && num >= 1 && num <= 40) map.set(num, button);
-        });
+        const num = (b) => {
+            const t = (b.textContent || '').trim();
+            return /^\d{1,2}$/.test(t) ? parseInt(t, 10) : NaN;
+        };
+        // querySelectorAll doesn't pierce shadow roots, so walk them too.
+        const deep = (selector) => {
+            const out = [];
+            const walk = (root) => {
+                out.push(...root.querySelectorAll(selector));
+                root.querySelectorAll('*').forEach(el => { if (el.shadowRoot) walk(el.shadowRoot); });
+            };
+            walk(document);
+            return out;
+        };
+        // If the number sits in a leaf <span> inside the real tile, climb to the
+        // clickable ancestor — that's what carries the `selected` class and what
+        // the highlight ring needs to wrap.
+        // Order matters: the number's own parent is `div.field-button__surface`,
+        // which would match [class*="field-button"] and hand back the inner div
+        // instead of the <button> that actually carries the `selected` class.
+        const clickTarget = (el) =>
+            el.closest('button')
+            || el.closest('[role="button"]')
+            || el.closest('[class*="field-button"]')
+            || el.closest('[class*="tile"]')
+            || el;
+
+        const collect = (list) => {
+            const map = new Map();
+            list.forEach(el => {
+                const n = num(el);
+                if (n >= 1 && n <= 40 && !map.has(n)) map.set(n, clickTarget(el));
+            });
+            return map;
+        };
+
+        let map = collect(deep('.keno-field button, .keno-field [role="button"]'));
+        if (map.size === 0) map = collect(deep('[class*="field-button"]'));
+        if (map.size === 0) {
+            // The tiles may not be <button> at all. Widen to anything clickable,
+            // then to any leaf element labelled 1-40. Only trust the result if it
+            // looks like a real 40-tile board; no extension UI exists in this
+            // frame to confuse the scan.
+            let scanned = collect(deep('button, [role="button"], a'));
+            if (scanned.size < 30) {
+                scanned = collect(deep('div, span, li').filter(el => el.children.length === 0));
+            }
+            map = scanned.size >= 30 ? scanned : new Map();
+        }
         return map;
     }
 
@@ -232,7 +360,7 @@ if (window.location.hostname.includes('games.winna.com')) {
     // without an infinite observer loop.
     function startWinnaHighlightObserver() {
         if (highlightObserver) return;
-        const container = document.querySelector('.keno-field');
+        const container = findWinnaBoard();
         if (!container) return;
         let scheduled = false;
         highlightObserver = new MutationObserver(() => {
