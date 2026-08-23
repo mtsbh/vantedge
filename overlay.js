@@ -5956,9 +5956,30 @@
         }
 
         // --- Strategy: Wheeling (Correlation-Based Way Tickets) ---
+        // Pair counts over the recent draws, keyed "lo-hi". Built here rather than
+        // waiting on the service worker's correlation round-trip: Wheeling used to
+        // fall back to Hot whenever that message hadn't landed, which made it Hot
+        // most of the time and silently.
+        pairCounts(limit = 150) {
+            const N = this.numberCount;
+            const draws = this.getRecentDraws(limit);
+            const cache = this._pairCache;
+            if (cache && cache.n === draws.length && cache.limit === limit) return cache.map;
+            const map = Object.create(null);
+            for (const d of draws) {
+                const u = [...new Set(d)].filter(n => n >= 1 && n <= N).sort((a, b) => a - b);
+                for (let i = 0; i < u.length; i++)
+                    for (let j = i + 1; j < u.length; j++)
+                        map[`${u[i]}-${u[j]}`] = (map[`${u[i]}-${u[j]}`] || 0) + 1;
+            }
+            this._pairCache = { n: draws.length, limit, map, draws: draws.length };
+            return map;
+        }
+
         getWheelingNumbers(count = 9) {
-            if (!this.correlationData || this.data.kenoStats.totalBets < 20) return this.getHotNumbers(count);
-            const pairEntries = Object.entries(this.correlationData.correlations?.[2] || {})
+            if (this.data.kenoStats.totalBets < 20) return this.getHotNumbers(count);
+            const pairs = this.pairCounts(150);
+            const pairEntries = Object.entries(pairs)
                 .filter(([, c]) => c > 2).sort(([, a], [, b]) => b - a);
             if (pairEntries.length === 0) return this.getHotNumbers(count);
             const groupSize = Math.ceil(count / 3);
@@ -5979,7 +6000,7 @@
             return unique.slice(0, count);
         }
         _findMostCorrelatedNumber(group, alreadySelected) {
-            const correlations = this.correlationData?.correlations?.[2] || {};
+            const correlations = this.pairCounts(150);
             let bestNum = null, bestScore = 0;
             for (let candidate = 1; candidate <= this.numberCount; candidate++) {
                 if (alreadySelected.includes(candidate)) continue;
@@ -6045,14 +6066,28 @@
         }
 
         // --- Strategy: Momentum (Recent Acceleration) ---
+        // Numbers hitting faster lately than their own session rate.
+        //
+        // This counted "recent hits" as `lastOccurrences.filter(g => g >= totalBets - w)`,
+        // but lastOccurrences holds the INTERVALS between a number's appearances,
+        // not game indices — processKenoData pushes `interval`. So the filter was
+        // counting intervals longer than the whole session minus w, which only
+        // rarely-drawn numbers ever have, and Momentum returned Cold's ticket.
+        // The scoring formula was right all along; it was reading the wrong array.
         getMomentumNumbers(count = 9) {
-            const totalBets = this.data.kenoStats.totalBets;
-            if (totalBets < 20) return this.getHotNumbers(count);
-            const w = Math.min(15, Math.floor(totalBets * 0.15));
-            return this.data.kenoStats.perNumberStats.map((s, i) => {
-                const recent = s.lastOccurrences.filter(g => g >= totalBets - w).length;
-                const recentRate = recent / w;
-                const histRate = s.count / totalBets;
+            const ks = this.data.kenoStats;
+            const games = ks.analyzedGames || Math.min(ks.totalBets, 1000);
+            if (games < 20) return this.getHotNumbers(count);
+            const N = this.numberCount;
+            const w = Math.max(10, Math.min(30, Math.round(games * 0.15)));
+            const draws = this.getRecentDraws(w);
+            if (draws.length < 10) return this.getHotNumbers(count);
+            const recent = new Array(N + 1).fill(0);
+            for (const d of draws) for (const n of d) if (n >= 1 && n <= N) recent[n]++;
+            return Array.from({ length: N }, (_, i) => {
+                const recentRate = recent[i + 1] / draws.length;
+                const histRate = (ks.hotNumbers[i] || 0) / games;
+                // rate now, plus double weight on the acceleration
                 return { n: i + 1, score: recentRate + (recentRate - histRate) * 2 };
             }).sort((a, b) => b.score - a.score).slice(0, count).map(x => x.n);
         }
