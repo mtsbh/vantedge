@@ -103,6 +103,8 @@
             this.hotGroupView = 'hot';
             this.smartPickView = 'pattern';
             this.smartPickSize = 6;
+            this.heatmapMode = 'tiered';
+            this.currentSelectedCombo = null;
             // Strategy grid view: 'main' (core 16) or 'alt' (alternative set).
             this.strategyView = 'main';
             this._momentum = null;
@@ -121,9 +123,12 @@
             const browserAPI = (typeof browser !== 'undefined' && browser?.storage) ? browser :
                 (typeof chrome !== 'undefined' && chrome?.storage) ? chrome : null;
             if (browserAPI && browserAPI.storage && browserAPI.storage.local) {
-                browserAPI.storage.local.get(['strategyToggles', 'comboFavorites'], (result) => {
+                browserAPI.storage.local.get(['strategyToggles', 'comboFavorites', 'heatmapMode'], (result) => {
                     if (result && result.strategyToggles) {
                         this.strategyToggles = result.strategyToggles;
+                    }
+                    if (result && result.heatmapMode) {
+                        this.heatmapMode = result.heatmapMode;
                     }
                     if (result && Array.isArray(result.comboFavorites)) {
                         this.comboFavorites = result.comboFavorites;
@@ -710,22 +715,18 @@
             return '';
         }
 
-        // Count numbers running hot/cold vs. their expected frequency (±15%).
+        // Count numbers running hot/cold vs. their expected frequency.
         hotColdCounts() {
             const N = this.numberCount;
             const counts = this.data.kenoStats.hotNumbers;
             const bets = this.data.kenoStats.totalBets;
             if (!bets) return { hot: 0, cold: 0, expected: 0 };
-            // Expected draws per number over the SAME window the counts were
-            // built from (last ≤1000 games) — using totalBets here inflated
-            // expected past what windowed counts can reach, pinning Hot at 0
-            // and saturating Cold once a session passed 1000 bets.
             const windowGames = this.data.kenoStats.analyzedGames || Math.min(bets, 1000);
             const expected = windowGames * ((this._drawnPerGame || 10) / N);
             let hot = 0, cold = 0;
             for (let i = 0; i < N; i++) {
-                if (counts[i] > expected * 1.15) hot++;
-                else if (counts[i] < expected * 0.85) cold++;
+                if (counts[i] > expected) hot++;
+                else if (counts[i] < expected) cold++;
             }
             return { hot, cold, expected };
         }
@@ -739,10 +740,7 @@
             return stats;
         }
 
-        // Per-strategy session P/L over the tracked bets, same units as
-        // sessionPL(): Σ(multiplier − 1) per paid bet, grouped by the strategy
-        // tag the background attached to each bet (activeStrategy/strategyUsed).
-        // Untagged bets (manual picks) simply don't appear here.
+        // Per-strategy session P/L over the tracked bets
         computeStrategyPL() {
             const all = this._validBets || [];
             if (this._stratPLCache && this._stratPLCache.ref === all) return this._stratPLCache.map;
@@ -761,30 +759,16 @@
             return map;
         }
 
-        // Small P/L number under each strategy tile (Core grid, Alt grid and the
-        // side drawer) — the Smart Picker statline treatment, per strategy. Only
-        // appears once a strategy has settled paid bets this session.
+        // Strategy grid tiles remain clean without messy in-button amount badges.
         updateStrategyPLBadges() {
             safe(() => {
-                const map = this.computeStrategyPL();
                 const items = [
                     ...(this.overlay?.querySelectorAll('.action-item') || []),
                     ...document.querySelectorAll('#overlay-side-actions .action-item')
                 ];
                 items.forEach(item => {
-                    const id = item.dataset.strategyId;
-                    const s = id && map[id];
-                    let el = item.querySelector('.vx-spl');
-                    if (!s || !s.paid) { if (el) el.remove(); return; }
-                    if (!el) {
-                        el = document.createElement('span');
-                        el.className = 'vx-spl';
-                        item.appendChild(el);
-                    }
-                    el.textContent = this.plFmt(s.pl);
-                    el.classList.toggle('pos', s.pl > 0.05);
-                    el.classList.toggle('neg', s.pl < -0.05);
-                    el.title = `${this.getStrategyName(id)} — session P/L ${this.plFmt(s.pl)} over ${s.paid} paid bets (${s.plays} plays, best ${s.best.toFixed(1)}x)`;
+                    const el = item.querySelector('.vx-spl');
+                    if (el) el.remove();
                 });
             });
         }
@@ -797,7 +781,7 @@
             const plStat = this.sessionPL();
             const hasPaid = plStat.paid > 0;
             const eps = curEpsilon(plStat.cur, plStat.pl);
-            const plCls = plStat.pl > eps ? 'hot' : (plStat.pl < -eps ? 'plneg' : '');
+            const plCls = plStat.pl > eps ? 'pos' : (plStat.pl < -eps ? 'neg' : '');
             const exp = expected ? Math.round(expected) : 0;
             const roi = plStat.roi;
             const others = plStat.others.length
@@ -805,20 +789,33 @@
                 : '';
             const tip = {
                 bets: 'Settled bets tracked on this seed.',
-                hot: `Numbers drawn 15%+ ABOVE expected (~${exp}× each so far). How many are running hot.`,
-                cold: `Numbers drawn 15%+ BELOW expected (~${exp}× each so far). How many are running cold.`,
+                hot: `Numbers drawn ABOVE expected (~${exp}× each so far).`,
+                cold: `Numbers drawn BELOW expected (~${exp}× each so far).`,
                 pl: hasPaid
                     ? `Net profit on real-money bets: stake × (multiplier − 1), summed. `
                       + `${plStat.bets} paid bet${plStat.bets === 1 ? '' : 's'}, ${fmtMoney(plStat.wagered, plStat.cur, { signed: false })} wagered, `
                       + `ROI ${roi > 0 ? '+' : ''}${roi.toFixed(1)}%.${others} Free ($0) bets are excluded.`
                     : 'Net profit on real-money bets: stake × (multiplier − 1), summed. Free ($0) bets are excluded.'
             };
-            el.innerHTML =
-                this.statTile('Bets', bets.toLocaleString(), '', tip.bets) +
-                this.statTile('Hot', bets ? hot : '—', 'hot', tip.hot) +
-                this.statTile('Cold', bets ? cold : '—', 'cold', tip.cold) +
-                // Only real-money bets have P/L; free ($0) play shows "—".
-                this.statTile('P/L', hasPaid ? fmtMoney(plStat.pl, plStat.cur, { compact: true }) : '—', hasPaid ? plCls : '', tip.pl);
+            const plFormatted = hasPaid ? fmtMoney(plStat.pl, plStat.cur, { compact: true }) : '—';
+            el.innerHTML = `
+                <div class="vx-stat-item" title="${tip.bets}">
+                    <span class="vx-stat-num">${bets.toLocaleString()}</span>
+                    <span class="vx-stat-txt">BETS</span>
+                </div>
+                <div class="vx-stat-item" title="${tip.hot}">
+                    <span class="vx-stat-num vx-hot-txt">${bets ? hot : '—'}</span>
+                    <span class="vx-stat-txt">HOT</span>
+                </div>
+                <div class="vx-stat-item" title="${tip.cold}">
+                    <span class="vx-stat-num vx-cold-txt">${bets ? cold : '—'}</span>
+                    <span class="vx-stat-txt">COLD</span>
+                </div>
+                <div class="vx-stat-item" title="${tip.pl}">
+                    <span class="vx-stat-num ${hasPaid ? plCls : ''}">${plFormatted}</span>
+                    <span class="vx-stat-txt">P/L</span>
+                </div>
+            `;
         }
 
         // Top co-occurring number trios from recent draws. Strength is each trio's
@@ -856,9 +853,7 @@
         }
 
         // Co-occurring groups of size k from recent draws, with hit count, current
-        // gap (draws since last full hit), avg interval and heat score
-        // (gapRatio × count/maxCount). Cached per (size, drawCount) since it runs
-        // on every UI refresh.
+        // gap (draws since last full hit), avg interval and heat score + rising burst score.
         computeHotGroups(k, limit = 200) {
             const N = this.numberCount;
             const draws = this.getRecentDraws(limit);
@@ -874,6 +869,8 @@
             }
             const stat = Object.create(null);
             let dpg = 0;
+            const shortWindow = Math.min(35, draws.length);
+
             for (let idx = 0; idx < draws.length; idx++) {
                 const u = [...new Set(draws[idx])].filter(n => n >= 1 && n <= N).sort((a, b) => a - b);
                 if (u.length > dpg) dpg = u.length;
@@ -881,12 +878,21 @@
                 this._kSubsets(u, k, (sub) => {
                     const key = sub.join('-');
                     let s = stat[key];
-                    if (!s) { stat[key] = { count: 1, minIdx: idx, maxIdx: idx }; }
-                    else { s.count++; if (idx < s.minIdx) s.minIdx = idx; if (idx > s.maxIdx) s.maxIdx = idx; }
+                    if (!s) {
+                        stat[key] = { count: 1, minIdx: idx, maxIdx: idx, recentCount: idx < shortWindow ? 1 : 0 };
+                    } else {
+                        s.count++;
+                        if (idx < s.minIdx) s.minIdx = idx;
+                        if (idx > s.maxIdx) s.maxIdx = idx;
+                        if (idx < shortWindow) s.recentCount = (s.recentCount || 0) + 1;
+                    }
                 });
             }
             this._drawnPerGame = dpg || 10;
             const expGap = this.expectedGroupGap(k);
+            const pGroup = expGap === Infinity ? 0 : 1 / expGap;
+            const expectedRecentHits = shortWindow * pGroup;
+
             let maxCount = 1;
             for (const key in stat) if (stat[key].count > maxCount) maxCount = stat[key].count;
             const groups = [];
@@ -894,11 +900,18 @@
                 const s = stat[key];
                 if (k >= 3 && s.count < 2) continue; // singletons aren't a "group" for trios+
                 const gap = s.minIdx; // draws since last full hit (0 = most recent)
-                const avgInterval = s.count > 1 ? Math.round((s.maxIdx - s.minIdx) / (s.count - 1)) : draws.length;
+                const avgInterval = s.count > 1 ? Math.round((s.maxIdx - s.minIdx) / (s.count - 1)) : Math.round(expGap);
                 const gapRatio = expGap === Infinity ? 0 : gap / expGap;
+                
+                // Rising score: mid-burst moment when short-window hit rate beats expected binomial odds
+                const recentBurst = (s.recentCount || 0) / Math.max(0.1, expectedRecentHits);
+                const risingScore = recentBurst * (1 / (gap + 1));
+
                 groups.push({
                     numbers: key.split('-').map(Number), key,
                     count: s.count, gap, avgInterval, gapRatio,
+                    recentCount: s.recentCount || 0,
+                    risingScore,
                     heat: gapRatio * (s.count / maxCount)
                 });
             }
@@ -926,7 +939,9 @@
         }
 
         applyCombo(numbers) {
-            this.animateSequentialSelection([...numbers].sort((a, b) => a - b));
+            this.currentSelectedCombo = [...numbers].sort((a, b) => a - b);
+            this.animateSequentialSelection(this.currentSelectedCombo);
+            this.renderSmartPicker();
         }
 
         // Star icon markup (filled when favorited).
@@ -948,12 +963,19 @@
                 `<button class="vx-gsize ${s === size ? 'on' : ''}" data-size="${s}" title="Groups of ${s} numbers that land together">${s}</button>`).join('');
 
             const viewTips = {
-                hot: 'Hot — ranked by heat score (how often it hits × how overdue it is). The default "strongest now" view.',
+                hot: 'Hot — ranked by heat score (how often it hits × how overdue it is).',
+                rising: 'Rising — combos mid-burst the moment their short-window hit rate beats expected odds.',
                 frequent: 'Frequent — ranked by raw hit count. Groups that appear most often, overdue or not.',
                 overdue: 'Overdue — ranked by gap vs its expected interval. Groups that are "due".',
                 cold: 'Cold — least-frequent groups in the window (the dud pile).'
             };
-            const tabs = [['hot', 'Hot'], ['frequent', 'Frequent'], ['overdue', 'Overdue'], ['cold', 'Cold']].map(([v, label]) =>
+            const tabs = [
+                ['hot', 'Hot'],
+                ['rising', 'Rising'],
+                ['frequent', 'Frequent'],
+                ['overdue', 'Overdue'],
+                ['cold', 'Cold']
+            ].map(([v, label]) =>
                 `<button class="vx-gtab ${v === view ? 'on' : ''}" data-view="${v}" title="${viewTips[v]}">${label}</button>`).join('');
 
             let groups;
@@ -964,7 +986,7 @@
                 const byKey = Object.create(null);
                 (live.groups || []).forEach(g => { byKey[g.key] = g; });
                 groups = (this.comboFavorites || []).map(key => byKey[key] || {
-                    numbers: key.split('-').map(Number), key, count: 0, gap: null, gapRatio: 0, heat: 0
+                    numbers: key.split('-').map(Number), key, count: 0, gap: null, gapRatio: 0, avgInterval: null, heat: 0
                 });
             } else {
                 const res = this.computeHotGroups(size);
@@ -977,6 +999,7 @@
                 groups = res.groups.slice();
                 const cmp = {
                     hot: (a, b) => b.heat - a.heat || b.count - a.count,
+                    rising: (a, b) => b.risingScore - a.risingScore || a.gap - b.gap,
                     frequent: (a, b) => b.count - a.count || a.gap - b.gap,
                     overdue: (a, b) => b.gapRatio - a.gapRatio || b.count - a.count,
                     cold: (a, b) => a.count - b.count || b.gap - a.gap
@@ -992,15 +1015,14 @@
                 const gapState = (g.gap === 0) ? 'now' : (g.gapRatio >= 1.5) ? 'overdue' : (g.gapRatio >= 0.8) ? 'due' : '';
                 const gapText = (g.gap == null) ? '—' : (g.gap === 0 ? 'NOW' : g.gap);
                 const heatPct = Math.round(((g.heat || 0) / maxHeat) * 100);
-                // Group trend = net momentum of its member numbers.
-                const mom = this._momentum || [];
-                let up = 0, down = 0;
-                g.numbers.forEach(n => { if (mom[n] === 'up') up++; else if (mom[n] === 'down') down++; });
-                const gArrow = up > down ? this.momentumIcon('up') : (down > up ? this.momentumIcon('down') : '');
-                return `<div class="vx-grow" data-combo-numbers="${g.numbers.join(',')}" title="Click to select these ${g.numbers.length} numbers">
-                            <span class="vx-gnums"><span class="vx-gtrend">${gArrow}</span>${nums}</span>
+                const avgVal = g.avgInterval != null ? g.avgInterval : Math.round(g.expGap || 10);
+                const isCurrent = this.currentSelectedCombo && this.comboKey(this.currentSelectedCombo) === g.key;
+
+                return `<div class="vx-grow ${isCurrent ? 'selected-group' : ''}" data-combo-numbers="${g.numbers.join(',')}" title="Click to select these ${g.numbers.length} numbers">
+                            <span class="vx-gnums">${nums}</span>
                             <span class="vx-gcell">${g.count || 0}</span>
                             <span class="vx-gcell gap ${gapState}">${gapText}</span>
+                            <span class="vx-gcell">${avgVal}</span>
                             <span class="vx-gcell heat">${heatPct}%</span>
                             <button class="vx-combo-star ${fav ? 'on' : ''}" data-combo-key="${g.key}" title="${fav ? 'Remove favorite' : 'Save favorite'}" aria-label="Toggle favorite">${this._starSvg(fav)}</button>
                         </div>`;
@@ -1016,15 +1038,15 @@
                     <span class="vx-gnums" title="Click a row to select these numbers on the board">Group</span>
                     <span class="vx-gcell vx-gsort ${view === 'frequent' ? 'on' : ''}" data-sortview="frequent" title="Hits — times this exact group was drawn together. Click to sort.">Hits${car('frequent')}</span>
                     <span class="vx-gcell vx-gsort ${view === 'overdue' ? 'on' : ''}" data-sortview="overdue" title="Gap — draws since it last hit. NOW=just hit, yellow=due, amber glow=overdue (>1.5× expected). Click to sort.">Gap${car('overdue')}</span>
+                    <span class="vx-gcell" title="Average interval (draws between hits)">Avg</span>
                     <span class="vx-gcell vx-gsort ${view === 'hot' ? 'on' : ''}" data-sortview="hot" title="Heat — combined score of frequency and how overdue it is, vs the top group. Click to sort.">Heat${car('hot')}</span>
                     <span style="width:17px"></span>
                 </div>`;
-            // When almost nothing has repeated at this size, every ranking surfaces
-            // the same one or two groups — flag it so the tabs don't look broken.
+
             const sparse = !favOnly && groups.length > 0 &&
                 (groups.length < 3 || groups.every(g => (g.count || 0) <= 2));
             const hint = sparse
-                ? `<div class="vx-combos-hint">Few repeating ${size}-groups yet — the Hot/Frequent/Overdue/Cold views need more draws (or a smaller size) to differ.</div>`
+                ? `<div class="vx-combos-hint">Few repeating ${size}-groups yet — keep playing to see distinct trends.</div>`
                 : '';
 
             el.innerHTML = this._hotGroupsShell(sizePills, tabs, favOnly) + head +
@@ -1034,12 +1056,10 @@
         }
 
         _hotGroupsShell(sizePills, tabs, favOnly) {
-            // Honest yardstick for the gap colors: how often a group of this size
-            // fully hits by pure chance (hypergeometric). "Overdue" = past 1.5x this.
             const size = this.hotGroupSize || 4;
             const exp = this.expectedGroupGap(size);
             const expHint = isFinite(exp)
-                ? `<div class="vx-gexp" title="A ${size}-number group fully hits about once per ${Math.round(exp).toLocaleString()} draws by pure chance. Gap colors compare each group's current gap to this: yellow from 0.8x, amber glow past 1.5x.">${size}-groups hit ~1 in ${Math.round(exp).toLocaleString()} draws</div>`
+                ? `<div class="vx-gexp" title="A ${size}-number group fully hits about once per ${Math.round(exp).toLocaleString()} draws by pure chance.">${size}-groups hit ~1 in ${Math.round(exp).toLocaleString()} draws</div>`
                 : '';
             return `
                 <div class="vx-combos-head">
@@ -1151,11 +1171,14 @@
             const key = [...numbers].sort((a, b) => a - b).join('-');
             const m = this.computeComboHistory()[key];
             const g = this.comboGap([...numbers].sort((a, b) => a - b));
+            const expGap = this.expectedGroupGap(numbers.length);
+            const gapRatio = g.gap == null || !isFinite(expGap) || expGap === 0 ? 0 : g.gap / expGap;
+            const avgInterval = m?.plays > 1 ? Math.round((m.lastSeen - m.firstSeen) / (m.plays - 1)) : null;
             return {
                 best: m?.best || 0, avg: m?.avg || 0, plays: m?.plays || 0,
                 pl: m?.pl || 0, wagered: m?.wagered || 0, cur: m?.cur || 'usd',
                 mixed: !!m?.mixed, paid: m?.paid || 0, roi: m?.roi || 0,
-                gap: g.gap, hits: g.hits
+                gap: g.gap, gapRatio, hits: g.hits, expGap, avgInterval
             };
         }
 
@@ -1208,6 +1231,12 @@
             const rows = combos.map(m => {
                 const g = this.comboGap(m.numbers);
                 const gapText = g.gap == null ? '—' : (g.gap === 0 ? 'NOW' : g.gap);
+                const expGap = this.expectedGroupGap(m.numbers.length);
+                const gapRatio = g.gap == null || !isFinite(expGap) || expGap === 0 ? 0 : g.gap / expGap;
+                const gapState = (g.gap === 0) ? 'now' : (gapRatio >= 1.5) ? 'overdue' : (gapRatio >= 0.8) ? 'due' : '';
+                const gapTip = g.gap == null ? 'No full hits in the tracked window'
+                    : g.gap === 0 ? 'Just hit — gap resets to NOW'
+                    : `Draws since this combo last fully hit. Expected ~${Math.round(expGap).toLocaleString()} draws, current gap ${g.gap} (${(gapRatio*100).toFixed(0)}% of expected).`;
                 const plCls = m.mixed ? '' : this.plClass(m.pl, m.cur);
                 const plTitle = m.paid
                     ? (m.mixed
@@ -1219,7 +1248,7 @@
                                 <span class="vx-gnums">${m.numbers.join('-')}</span>
                                 <span class="vx-chpl ${plCls}" title="${plTitle}">${m.paid ? this.plFmt(m.pl, m.cur, { mixed: m.mixed, compact: true }) : '—'}</span>
                             </div>
-                            <div class="vx-chsub">best <span class="vx-chbest" title="Top multipliers — click to expand${m.bestCount > 1 ? ` (best landed ${m.bestCount}×)` : ''}">${m.best.toFixed(1)}x${bestSup}</span> · avg ${m.avg.toFixed(1)}x · ${m.plays} plays · gap <span class="vx-chgap ${gapState}" title="${gapTip}">${gapText}${gapSup}</span></div>
+                            <div class="vx-chsub">best <span class="vx-chbest" title="Top multipliers — click to expand">${m.best.toFixed(1)}x</span> · avg ${m.avg.toFixed(1)}x · ${m.plays} plays · gap <span class="vx-chgap ${gapState}" title="${gapTip}">${gapText}</span></div>
                             <div class="vx-chdetail" hidden></div>
                         </div>`;
             }).join('');
@@ -1243,56 +1272,111 @@
 
         // --- Smart Picker --------------------------------------------------------
 
-        // Pattern: composite score across multiple signals (streaks, gaps,
-        // positional tendency, frequency, momentum, hot-combo membership), then top N.
+        // Pattern: rides what is hot — frequency in last 150 draws weighted by gap vs expected,
+        // boosted by hot-combo co-occurrence and recent momentum.
         patternScores() {
             const N = this.numberCount;
+            const draws = this.getRecentDraws(150);
+            const totalDraws = draws.length;
             const score = new Array(N + 1).fill(0);
-            const addRanked = (nums, w) => {
-                if (!nums) return;
-                const len = nums.length || 1;
-                nums.forEach((n, i) => { if (n >= 1 && n <= N) score[n] += w * (1 - i / len); });
-            };
-            addRanked(this.getStreakNumbers(N), 1.0);      // streaks / clusters
-            addRanked(this.getOverdueNumbers(N), 0.7);     // gaps
-            addRanked(this.getPositionalNumbers(N), 0.6);  // positional tendency
-            addRanked(this.getHotNumbers(N), 0.5);         // frequency
+            if (!totalDraws) return score;
+
+            const counts = new Array(N + 1).fill(0);
+            const lastSeen = new Array(N + 1).fill(totalDraws);
+            const expGap = N / (this._drawnPerGame || 10); // ~4 on Stake 40-grid
+
+            draws.forEach((d, idx) => {
+                const u = [...new Set(d)].filter(n => n >= 1 && n <= N);
+                u.forEach(n => {
+                    counts[n]++;
+                    if (idx < lastSeen[n]) lastSeen[n] = idx;
+                });
+            });
+
+            for (let n = 1; n <= N; n++) {
+                const c = counts[n];
+                const gap = lastSeen[n];
+                // Base heat: frequency weighted by gap vs expected
+                const gapWeight = gap <= expGap ? 1.25 : Math.max(0.2, 1 - (gap - expGap) / (3 * expGap));
+                score[n] = c * gapWeight;
+            }
+
+            // Boost numbers inside session's hottest combos
+            const hg = this.computeHotGroups(3, 150);
+            (hg.groups || []).slice(0, 10).forEach(g => {
+                const heat = g.heat || 0;
+                g.numbers.forEach(n => {
+                    if (n >= 1 && n <= N) score[n] += heat * 1.5;
+                });
+            });
+
+            // Momentum boost
             const mom = this._momentum || this.computeMomentum();
-            for (let n = 1; n <= N; n++) if (mom[n] === 'up') score[n] += 0.5;  // momentum
-            const hg = this.computeHotGroups(3);
-            (hg.groups || []).slice(0, 12).forEach(g => g.numbers.forEach(n => { score[n] += 0.4; }));
+            for (let n = 1; n <= N; n++) {
+                if (mom[n] === 'up') score[n] += 1.0;
+            }
+
             return score;
         }
 
-        // Pairs: recency-weighted affinity matrix; start from the strongest single
-        // affinity, grow by adding the number most co-correlated with the set so far.
+        // Pairs: recency-weighted co-occurrence matrix; seeds from the strongest
+        // repeating combo in the session, extends with numbers that co-occur more
+        // often than chance, with empirical Bayes shrinkage for thin samples.
         pairsPick(size) {
             const N = this.numberCount;
             const draws = this.getRecentDraws(150);
             const W = draws.length;
+            if (W < 10) return this.getRandomNumbers(size);
+
             const aff = Object.create(null);
             const single = new Array(N + 1).fill(0);
             const pk = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
+            const pPairExp = ((this._drawnPerGame || 10) * ((this._drawnPerGame || 10) - 1)) / (N * (N - 1));
+
             draws.forEach((d, idx) => {
-                const w = 1 - idx / (W + 1); // newest ≈ 1, oldest → 0
+                const w = 1 - (idx / (W + 1)) * 0.6; // recency weighting
                 const u = [...new Set(d)].filter(n => n >= 1 && n <= N).sort((a, b) => a - b);
                 u.forEach(n => { single[n] += w; });
-                for (let i = 0; i < u.length; i++)
+                for (let i = 0; i < u.length; i++) {
                     for (let j = i + 1; j < u.length; j++) {
-                        const k = u[i] + '-' + u[j];
+                        const k = pk(u[i], u[j]);
                         aff[k] = (aff[k] || 0) + w;
                     }
+                }
             });
-            let start = 1;
-            for (let n = 2; n <= N; n++) if (single[n] > single[start]) start = n;
-            const picked = [start];
+
+            // Seed from top repeating combo in session
+            const hg = this.computeHotGroups(2, 150);
+            let seedPair = null;
+            if (hg.groups && hg.groups.length > 0) {
+                seedPair = hg.groups[0].numbers;
+            }
+
+            const picked = seedPair ? [...seedPair] : [];
+            if (!picked.length) {
+                let start = 1;
+                for (let n = 2; n <= N; n++) if (single[n] > single[start]) start = n;
+                picked.push(start);
+            }
+
+            // Empirical Bayes shrinkage constant (k=3)
+            const kShrink = 3;
+            const expAffinity = (W * pPairExp);
+
             while (picked.length < size) {
                 let best = -1, bestScore = -1;
                 for (let n = 1; n <= N; n++) {
                     if (picked.includes(n)) continue;
                     let s = 0;
-                    for (const p of picked) s += aff[pk(p, n)] || 0;
-                    if (s > bestScore) { bestScore = s; best = n; }
+                    for (const p of picked) {
+                        const raw = aff[pk(p, n)] || 0;
+                        const shrunk = (raw + kShrink * expAffinity) / (W + kShrink);
+                        s += shrunk;
+                    }
+                    if (s > bestScore) {
+                        bestScore = s;
+                        best = n;
+                    }
                 }
                 if (best < 0) break;
                 picked.push(best);
@@ -1300,15 +1384,50 @@
             return picked.slice(0, size).sort((a, b) => a - b);
         }
 
-        // Build a pick of `size` numbers using one of three lenses. All need >=30
-        // recent games; below that they fall back to random (per the reference).
+        // Stats: deficit z-score against expected frequency, weighted by overdue gap.
+        statsPick(size) {
+            const N = this.numberCount;
+            const draws = this.getRecentDraws(1000);
+            const total = draws.length;
+            if (total < 15) return this.getRandomNumbers(size);
+
+            const p = (this._drawnPerGame || 10) / N; // 0.25 on Stake 40-grid
+            const expectedHits = total * p;
+            const stdDev = Math.sqrt(total * p * (1 - p)) || 1;
+            const counts = new Array(N + 1).fill(0);
+            const lastSeen = new Array(N + 1).fill(total);
+
+            draws.forEach((d, idx) => {
+                const u = [...new Set(d)].filter(n => n >= 1 && n <= N);
+                u.forEach(n => {
+                    counts[n]++;
+                    if (idx < lastSeen[n]) lastSeen[n] = idx;
+                });
+            });
+
+            const expGap = 1 / p; // ~4 draws
+            const scores = [];
+            for (let n = 1; n <= N; n++) {
+                const hits = counts[n];
+                const deficitZ = (expectedHits - hits) / stdDev; // positive when underrepresented
+                const gap = lastSeen[n];
+                const gapWeight = gap >= expGap ? 1 + 0.3 * Math.min(gap / expGap, 4) : 0.8;
+                const score = deficitZ * gapWeight;
+                scores.push({ n, score });
+            }
+
+            return scores.sort((a, b) => b.score - a.score)
+                .slice(0, size)
+                .map(x => x.n)
+                .sort((a, b) => a - b);
+        }
+
+        // Build a pick of `size` numbers using one of three lenses.
         smartPick(view, size) {
             const N = this.numberCount;
-            if (this.getRecentDraws(30).length < 30) return this.getRandomNumbers(size);
+            if (this.getRecentDraws(20).length < 20) return this.getRandomNumbers(size);
             if (view === 'pairs') return this.pairsPick(size);
-            if (view === 'stats') {
-                return (this.getVarianceNumbers(size) || []).filter(n => n >= 1 && n <= N).slice(0, size).sort((a, b) => a - b);
-            }
+            if (view === 'stats') return this.statsPick(size);
             const score = this.patternScores();
             return Array.from({ length: N }, (_, i) => i + 1)
                 .sort((a, b) => score[b] - score[a])
@@ -1323,46 +1442,77 @@
             const size = this.smartPickSize || (this.smartPickSize = 6);
 
             const tabTips = {
-                pattern: 'Pattern — blends many signals (streaks, gaps, positional bias, frequency, momentum, hot-combo membership) into one score and picks the top numbers.',
-                pairs: 'Pairs — recency-weighted correlation matrix; starts from the strongest number and grows a set that tends to land TOGETHER.',
-                stats: 'Stats — z-score / chi-square: numbers running most significantly ABOVE their expected frequency (statistically over-represented).'
+                pattern: 'Pattern — rides the current run: scores numbers by heat in last 150 draws weighted by gap vs expected, plus hot combo boost.',
+                pairs: 'Pairs — builds around groups that land together using co-occurrence correlation matrix with shrinkage.',
+                stats: 'Stats — statistical deficit z-score: targets numbers due vs expected frequency and past their expected gap.'
             };
-            const tabs = [['pattern', 'Pattern'], ['pairs', 'Pairs'], ['stats', 'Stats']].map(([v, l]) =>
-                `<button class="vx-gtab ${v === view ? 'on' : ''}" data-spview="${v}" title="${tabTips[v]}">${l}</button>`).join('');
-            const sizeOpts = [4, 5, 6, 7, 8, 9, 10].map(s =>
-                `<option value="${s}" ${s === size ? 'selected' : ''}>${s} numbers</option>`).join('');
+
+            const sizeOpts = [2, 3, 4, 5, 6, 7, 8, 9, 10].map(s =>
+                `<option value="${s}" ${s === size ? 'selected' : ''}>${s}</option>`).join('');
 
             const pick = this.smartPick(view, size);
-            const stats = pick.length ? this.getComboStats(pick) : null;
-            const gapText = !stats ? '—' : (stats.gap == null ? '—' : (stats.gap === 0 ? 'NOW' : stats.gap));
+            const activeNums = (this.currentSelectedCombo && this.currentSelectedCombo.length > 0)
+                ? this.currentSelectedCombo
+                : pick;
 
-            const numsHtml = pick.length
-                ? pick.map(n => `<span class="vx-chip">${n}</span>`).join('')
-                : `<span class="vx-combos-empty" style="padding:0">Need 30+ games — playing builds the picks.</span>`;
+            const stats = activeNums.length ? this.getComboStats(activeNums) : null;
+            const gapText = !stats ? '--' : (stats.gap == null ? '--' : (stats.gap === 0 ? 'NOW' : stats.gap));
+            const gapClass = stats ? (stats.gap === 0 ? 'now' : (stats.gapRatio >= 1.5 ? 'overdue' : (stats.gapRatio >= 0.8 ? 'due' : ''))) : '';
+            const plClass = stats && stats.paid ? this.plClass(stats.pl, stats.cur) : '';
+            const plText = stats && stats.paid ? this.plFmt(stats.pl, stats.cur, { mixed: stats.mixed, compact: true }) : '--';
 
-            const statline = stats ? `<div class="vx-spstats">
-                    <span>best <b>${stats.best.toFixed(1)}x</b></span>
-                    <span>avg <b>${stats.avg.toFixed(1)}x</b></span>
-                    <span>plays <b>${stats.plays}</b></span>
-                    <span>gap <b>${gapText}</b></span>
-                    <span title="${stats.paid ? `Net profit on ${stats.paid} paid play${stats.paid === 1 ? '' : 's'} of this exact combo, ${fmtMoney(stats.wagered, stats.cur, { signed: false })} wagered.` : 'No money staked on this combo yet.'}">P/L <b class="${stats.mixed ? '' : this.plClass(stats.pl, stats.cur)}">${stats.paid ? this.plFmt(stats.pl, stats.cur, { mixed: stats.mixed, compact: true }) : '—'}</b></span>
-                </div>` : '';
+            const numsDisplay = activeNums.length
+                ? activeNums.join(', ')
+                : 'Need more draws to analyze.';
 
             el.innerHTML = `
-                <div class="vx-combos-head"><span class="vx-section-title">Smart picker</span></div>
-                <div class="vx-gtabs">${tabs}</div>
-                <div class="vx-spctl">
-                    <select class="vx-spsize" id="overlay-sp-size" title="How many numbers to pick">${sizeOpts}</select>
-                    ${pick.length ? `<button class="vx-spapply" id="overlay-sp-apply">Apply</button>` : ''}
+                <div class="vx-combos-head"><span class="vx-section-title">SMART PICKER</span></div>
+                <div class="vx-sp-row1">
+                    <button class="vx-sp-btn ${view === 'pattern' ? 'on' : ''}" data-spview="pattern" title="${tabTips.pattern}">
+                        <span class="vx-sp-icon">⬡</span> Pattern
+                    </button>
+                    <button class="vx-sp-btn ${view === 'pairs' ? 'on' : ''}" data-spview="pairs" title="${tabTips.pairs}">
+                        <span class="vx-sp-icon">∞</span> Pairs
+                    </button>
+                    <button class="vx-sp-btn ${view === 'stats' ? 'on' : ''}" data-spview="stats" title="${tabTips.stats}">
+                        <span class="vx-sp-icon">ılı</span> Stats
+                    </button>
+                    <div class="vx-sp-select-wrap">
+                        <select class="vx-spsize" id="overlay-sp-size" title="Spot count">${sizeOpts}</select>
+                    </div>
                 </div>
-                <div class="vx-spnums">${numsHtml}</div>
-                ${statline}`;
+                <div class="vx-sp-nums-row">
+                    <div class="vx-sp-nums-list" id="overlay-current-combo-nums" title="Click to apply these numbers to the board">
+                        ${numsDisplay}
+                    </div>
+                </div>
+                <div class="vx-sp-stats-grid">
+                    <div class="vx-sp-col"><span class="vx-sp-k">BEST</span><span class="vx-sp-v ${stats && stats.best > 0 ? 'pos' : ''}">${stats && stats.best > 0 ? stats.best.toFixed(1) + 'x' : '--'}</span></div>
+                    <div class="vx-sp-col"><span class="vx-sp-k">AVG</span><span class="vx-sp-v">${stats && stats.avg > 0 ? stats.avg.toFixed(1) + 'x' : '--'}</span></div>
+                    <div class="vx-sp-col"><span class="vx-sp-k">BETS</span><span class="vx-sp-v">${stats ? stats.plays : '0'}</span></div>
+                    <div class="vx-sp-col"><span class="vx-sp-k">GAP</span><span class="vx-sp-v ${gapClass}">${gapText}</span></div>
+                    <div class="vx-sp-col"><span class="vx-sp-k">P/L</span><span class="vx-sp-v ${plClass}">${plText}</span></div>
+                </div>`;
 
-            el.querySelectorAll('.vx-gtab').forEach(b => b.onclick = () => { this.smartPickView = b.dataset.spview; this.renderSmartPicker(); });
+            el.querySelectorAll('.vx-sp-btn').forEach(b => b.onclick = () => {
+                this.smartPickView = b.dataset.spview;
+                const newPick = this.smartPick(this.smartPickView, this.smartPickSize);
+                this.currentSelectedCombo = newPick;
+                this.applyCombo(newPick);
+                this.renderSmartPicker();
+            });
             const sizeSel = el.querySelector('#overlay-sp-size');
-            if (sizeSel) sizeSel.onchange = (e) => { this.smartPickSize = parseInt(e.target.value, 10); this.renderSmartPicker(); };
-            const applyBtn = el.querySelector('#overlay-sp-apply');
-            if (applyBtn) applyBtn.onclick = () => this.applyCombo(pick);
+            if (sizeSel) sizeSel.onchange = (e) => {
+                this.smartPickSize = parseInt(e.target.value, 10);
+                const newPick = this.smartPick(this.smartPickView, this.smartPickSize);
+                this.currentSelectedCombo = newPick;
+                this.applyCombo(newPick);
+                this.renderSmartPicker();
+            };
+            const numsEl = el.querySelector('#overlay-current-combo-nums');
+            if (numsEl) numsEl.onclick = () => {
+                if (activeNums.length) this.applyCombo(activeNums);
+            };
         }
 
         fetchAndDisplayCorrelations() {
@@ -1396,6 +1546,20 @@
             }
         }
 
+        getSiteBadgeText() {
+            const site = this.getCurrentSite();
+            const map = {
+                stake: 'Stake',
+                rainbet: 'Rainbet',
+                roobet: 'Roobet',
+                shuffle: 'Shuffle',
+                betfury: 'BetFury',
+                winna: 'Winna',
+                acebet: 'AceBet'
+            };
+            return map[site] || 'Stake';
+        }
+
         createOverlay() {
             this.overlay = document.createElement('div');
             this.overlay.id = 'geminyzer-overlay';
@@ -1405,10 +1569,7 @@
                     <span class="overlay-icon">${this.ctlIcon('bolt')}</span>
                     <span class="overlay-name">VantEdge</span>
                     <span class="overlay-pro">PRO</span>
-                    <span class="overlay-stats">
-                        <span id="overlay-total-bets">0</span> <span id="overlay-stats-label">bets</span>
-                        <span id="enhancement-status" class="enhancement-status" title="Enhancement Status">⚡</span>
-                    </span>
+                    <span class="overlay-site-badge" id="overlay-site-badge">${this.getSiteBadgeText()}</span>
                 </div>
                 <div class="overlay-controls">
                     <button id="overlay-layout" title="Toggle sidebar / overlay">${this.ctlIcon('layout')}</button>
@@ -1419,11 +1580,6 @@
             </div>
             <div class="overlay-content" id="overlay-content"></div>`;
             safe(() => document.body.appendChild(this.overlay));
-
-            // The old slide-out "Alternative" drawer + its ▶ tab were removed in
-            // favour of the in-grid Core/Alternative toggle. All drawer methods
-            // (positionSideDrawer/toggleSideDrawer/etc.) null-guard, so leaving them
-            // is harmless; we simply no longer create the DOM.
         }
 
         // ===================== Mines mode ==================================
@@ -2038,6 +2194,10 @@
             return `
                 <div class="vx-status-strip" id="overlay-status-strip"></div>
                 <div class="keno-heatmap-container">
+                    <div class="keno-heatmap-header">
+                        <span class="vx-section-title">HEATMAP</span>
+                        <button class="vx-hm-mode-btn" id="overlay-heatmap-mode" title="Toggle Tiered vs Gradient color modes">${(this.heatmapMode || 'tiered').toUpperCase()}</button>
+                    </div>
                     <div class="keno-heatmap-grid" id="overlay-keno-grid"></div>
                     <div class="quick-actions-container">
                         <div class="vx-strat-toggle" id="overlay-strat-toggle">
@@ -3068,13 +3228,23 @@
                }
 
                .overlay-pro {
-                   font-size: 9px;
-                   font-weight: 600;
+                   font-size: 11px;
+                   font-weight: 700;
                    color: #3fb950;
-                   border: 1px solid rgba(63, 185, 80, 0.4);
-                   border-radius: 4px;
-                   padding: 1px 4px;
                    letter-spacing: 0.5px;
+                   margin-left: -2px;
+               }
+
+               .overlay-site-badge {
+                   font-size: 11px;
+                   font-weight: 600;
+                   color: #8b949e;
+                   background: rgba(255, 255, 255, 0.06);
+                   border: 1px solid rgba(255, 255, 255, 0.10);
+                   border-radius: 5px;
+                   padding: 1px 7px;
+                   margin-left: 6px;
+                   letter-spacing: 0.2px;
                }
 
                .overlay-stats {
@@ -3474,270 +3644,335 @@
            .vx-st-btn:hover { color: #e6edf3; border-color: rgba(255, 255, 255, 0.18); }
            .vx-st-btn.on { background: rgba(63, 185, 80, 0.16); border-color: rgba(63, 185, 80, 0.5); color: #3fb950; }
 
-           /* ---- Status strip ---- */
-           .vx-status-strip {
-               display: grid;
-               grid-template-columns: repeat(4, 1fr);
-               gap: 5px;
-               padding: 7px 12px;
-               border-bottom: 1px solid rgba(255, 255, 255, 0.10);
-           }
-           .vx-stat {
-               display: flex;
-               align-items: baseline;
-               justify-content: space-between;
-               gap: 4px;
-               background: linear-gradient(160deg, #161e2a, #0f151e);
-               border: 1px solid rgba(255, 255, 255, 0.08);
-               border-radius: 7px;
-               padding: 4px 8px;
-               min-width: 0;
-           }
-           .vx-stat-k {
-               font-size: 9px;
-               font-weight: 500;
-               color: #7d8694;
-               text-transform: uppercase;
-               letter-spacing: 0.5px;
-           }
-           .vx-stat-v {
-               font-size: 14px;
-               font-weight: 600;
-               color: #e6edf3;
-               white-space: nowrap;
-               font-variant-numeric: tabular-nums;
-               /* money P/L can be long ("+1,234.56 USDT") — clip instead of
-                  stretching the 4-up grid */
-               min-width: 0;
-               overflow: hidden;
-               text-overflow: ellipsis;
-           }
-           .vx-stat-v.hot { color: #3fb950; }
-           .vx-stat-v.cold { color: #58a6ff; }
-           .vx-stat-v.heat { color: #3fb950; }
-           .vx-stat-v.plneg { color: #e5534b; }
-           .vx-stat-sub {
-               font-size: 10px;
-               font-weight: 400;
-               color: #6e7681;
-               margin-left: 2px;
-           }
+            /* ---- Status strip ---- */
+            .vx-status-strip {
+                display: flex;
+                align-items: center;
+                justify-content: space-around;
+                padding: 9px 12px;
+                background: transparent;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            }
+            .vx-stat-item {
+                display: flex;
+                align-items: baseline;
+                gap: 5px;
+            }
+            .vx-stat-num {
+                font-size: 13px;
+                font-weight: 700;
+                color: #e6edf3;
+                font-variant-numeric: tabular-nums;
+            }
+            .vx-stat-txt {
+                font-size: 10px;
+                font-weight: 600;
+                color: #6e7681;
+                letter-spacing: 0.5px;
+            }
+            .vx-stat-num.vx-hot-txt { color: #3fb950; }
+            .vx-stat-num.vx-cold-txt { color: #58a6ff; }
+            .vx-stat-num.pos { color: #3fb950; }
+            .vx-stat-num.neg { color: #e5534b; }
 
-           /* ---- Heatmap momentum arrows ---- */
-           .heatmap-number { position: relative; }
-           .vx-mom {
-               position: absolute;
-               top: 1px;
-               right: 1px;
-               /* Dark halo so the arrow reads on any HSL cell colour. */
-               filter: drop-shadow(0 0 1px rgba(0,0,0,0.95)) drop-shadow(0 0 1px rgba(0,0,0,0.7));
-           }
-           .vx-mom.up { color: #16e85a; }
-           .vx-mom.down { color: #4ea8ff; }
+            /* ---- Heatmap header & mode ---- */
+            .keno-heatmap-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 8px;
+            }
+            .vx-hm-mode-btn {
+                background: rgba(255, 255, 255, 0.05);
+                border: 1px solid rgba(255, 255, 255, 0.12);
+                color: #8b949e;
+                border-radius: 5px;
+                padding: 2px 8px;
+                font-size: 10px;
+                font-weight: 600;
+                cursor: pointer;
+                letter-spacing: 0.5px;
+                transition: all 0.12s ease;
+            }
+            .vx-hm-mode-btn:hover {
+                color: #3fb950;
+                border-color: rgba(63, 185, 80, 0.4);
+                background: rgba(63, 185, 80, 0.08);
+            }
 
-           /* ---- Hot combos ---- */
-           .vx-combos {
-               padding: 10px 12px 12px;
-               border-top: 1px solid rgba(255, 255, 255, 0.10);
-           }
-           .vx-combos-head {
-               display: flex;
-               align-items: center;
-               justify-content: space-between;
-               margin-bottom: 8px;
-           }
-           .vx-section-title {
-               font-size: 10px;
-               font-weight: 600;
-               color: #8a97a8;
-               text-transform: uppercase;
-               letter-spacing: 1.2px;
-           }
-           .vx-fav-toggle {
-               display: inline-flex;
-               align-items: center;
-               gap: 4px;
-               font-size: 10px;
-               color: #8b949e;
-               background: transparent;
-               border: 1px solid rgba(255, 255, 255, 0.10);
-               border-radius: 6px;
-               padding: 3px 7px;
-               cursor: pointer;
-               transition: all 0.12s ease;
-           }
-           .vx-fav-toggle:hover { border-color: rgba(240, 192, 0, 0.5); color: #e6edf3; }
-           .vx-fav-toggle.on { color: #f0c000; border-color: rgba(240, 192, 0, 0.45); }
-           /* size pills (2-10) */
-           .vx-gsizes { display: flex; gap: 3px; margin-bottom: 7px; }
-           .vx-gsize {
-               flex: 1;
-               background: #10161f;
-               border: 1px solid rgba(255, 255, 255, 0.08);
-               color: #8b949e;
-               border-radius: 5px;
-               padding: 3px 0;
-               font-size: 10px;
-               cursor: pointer;
-               transition: all 0.12s ease;
-           }
-           .vx-gsize:hover { border-color: rgba(63, 185, 80, 0.4); color: #e6edf3; }
-           .vx-gsize.on { background: rgba(63, 185, 80, 0.16); border-color: rgba(63, 185, 80, 0.5); color: #3fb950; }
-           /* view tabs */
-           .vx-gtabs { display: flex; gap: 3px; margin-bottom: 8px; }
-           .vx-gtab {
-               flex: 1;
-               background: transparent;
-               border: 1px solid rgba(255, 255, 255, 0.08);
-               color: #8b949e;
-               border-radius: 5px;
-               padding: 4px 0;
-               font-size: 10px;
-               cursor: pointer;
-               transition: all 0.12s ease;
-           }
-           .vx-gtab:hover { color: #e6edf3; border-color: rgba(255, 255, 255, 0.18); }
-           .vx-gtab.on { background: rgba(255, 255, 255, 0.06); color: #e6edf3; border-color: rgba(255, 255, 255, 0.2); }
-           /* table header + rows */
-           .vx-ghead, .vx-grow {
-               display: flex;
-               align-items: center;
-               gap: 6px;
-           }
-           .vx-ghead {
-               font-size: 9px;
-               color: #6e7681;
-               text-transform: uppercase;
-               letter-spacing: 0.4px;
-               padding: 0 4px 5px;
-           }
-           .vx-grow {
-               background: #0f1620;
-               border: 1px solid rgba(255, 255, 255, 0.08);
-               border-radius: 6px;
-               padding: 5px 4px 5px 8px;
-               margin-bottom: 5px;
-               cursor: pointer;
-               transition: all 0.12s ease;
-           }
-           .vx-grow:last-child { margin-bottom: 0; }
-           .vx-grow:hover { border-color: rgba(63, 185, 80, 0.45); background: #111924; }
-           .vx-gnums {
-               flex: 1;
-               min-width: 0;
-               font-size: 11px;
-               font-weight: 500;
-               color: #e6edf3;
-               white-space: nowrap;
-               overflow: hidden;
-               text-overflow: ellipsis;
-           }
-           .vx-gcell {
-               flex: 0 0 auto;
-               width: 34px;
-               text-align: right;
-               font-size: 10px;
-               color: #8b949e;
-           }
-           .vx-gcell.heat { color: #3fb950; }
-           .vx-gcell.gap.now { color: #3fb950; }
-           .vx-gcell.gap.due { color: #d6a700; }
-           .vx-gcell.gap.overdue { color: #e0913a; font-weight: 600; text-shadow: 0 0 6px rgba(224, 145, 58, 0.85); }
-           /* Combo History gap uses the same states as Hot Groups gap */
-           .vx-chgap.now { color: #3fb950; }
-           .vx-chgap.due { color: #d6a700; }
-           .vx-chgap.overdue { color: #e0913a; font-weight: 600; text-shadow: 0 0 6px rgba(224, 145, 58, 0.85); }
-           .vx-chsub sup, .vx-chmx sup { font-size: 8px; opacity: 0.75; }
-           .vx-gexp {
-               font-size: 9px;
-               color: #6e7681;
-               text-align: right;
-               padding: 2px 2px 0;
-           }
-           .vx-gtrend { display: inline-flex; vertical-align: middle; margin-right: 3px; }
-           .vx-gtrend:empty { display: none; }
-           .vx-combo-star {
-               background: transparent;
-               border: none;
-               padding: 0 2px;
-               cursor: pointer;
-               color: #3a434f;
-               display: inline-flex;
-               flex: 0 0 auto;
-               transition: color 0.12s ease;
-           }
-           .vx-combo-star:hover { color: #f0c000; }
-           .vx-combo-star.on { color: #f0c000; }
-           .vx-combos-empty {
-               font-size: 11px;
-               color: #6e7681;
-               text-align: center;
-               padding: 10px 4px;
-           }
-           .vx-combos-hint {
-               font-size: 9px;
-               color: #6e7681;
-               text-align: center;
-               padding: 7px 4px 2px;
-               line-height: 1.4;
-           }
+            /* ---- Heatmap momentum arrows ---- */
+            .heatmap-number { position: relative; }
+            .vx-mom {
+                position: absolute;
+                top: 1px;
+                right: 1px;
+                filter: drop-shadow(0 0 1px rgba(0,0,0,0.95)) drop-shadow(0 0 1px rgba(0,0,0,0.7));
+            }
+            .vx-mom.up { color: #16e85a; }
+            .vx-mom.down { color: #4ea8ff; }
 
-           /* ---- Smart picker ---- */
-           .vx-spctl {
-               display: flex;
-               align-items: center;
-               justify-content: space-between;
-               gap: 8px;
-               margin-bottom: 8px;
-           }
-           .vx-spsize {
-               background: #10161f;
-               border: 1px solid rgba(255, 255, 255, 0.10);
-               color: #e6edf3;
-               border-radius: 6px;
-               padding: 4px 8px;
-               font-size: 11px;
-               cursor: pointer;
-               outline: none;
-           }
-           .vx-spsize:hover { border-color: rgba(63, 185, 80, 0.45); }
-           .vx-spnums {
-               display: flex;
-               flex-wrap: wrap;
-               gap: 4px;
-               align-items: center;
-           }
-           .vx-chip {
-               background: #1a2330;
-               border-radius: 4px;
-               font-size: 11px;
-               font-weight: 500;
-               color: #e6edf3;
-               padding: 2px 7px;
-           }
-           .vx-spapply {
-               flex: 0 0 auto;
-               background: rgba(63, 185, 80, 0.16);
-               border: 1px solid rgba(63, 185, 80, 0.5);
-               color: #3fb950;
-               border-radius: 6px;
-               padding: 5px 12px;
-               font-size: 11px;
-               font-weight: 600;
-               cursor: pointer;
-               transition: all 0.12s ease;
-           }
-           .vx-spapply:hover { background: rgba(63, 185, 80, 0.28); }
-           .vx-spstats {
-               display: flex;
-               flex-wrap: wrap;
-               gap: 4px 12px;
-               margin-top: 8px;
-               font-size: 10px;
-               color: #6e7681;
-           }
-           .vx-spstats b { color: #c9d1d9; font-weight: 600; }
-           .vx-spstats b.pos, .vx-chpl.pos { color: #3fb950; }
+            /* ---- Hot combos ---- */
+            .vx-combos {
+                padding: 10px 12px 12px;
+                border-top: 1px solid rgba(255, 255, 255, 0.10);
+            }
+            .vx-combos-head {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                margin-bottom: 8px;
+            }
+            .vx-section-title {
+                font-size: 10px;
+                font-weight: 600;
+                color: #8a97a8;
+                text-transform: uppercase;
+                letter-spacing: 1.2px;
+            }
+            .vx-fav-toggle {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                font-size: 10px;
+                color: #8b949e;
+                background: transparent;
+                border: 1px solid rgba(255, 255, 255, 0.10);
+                border-radius: 6px;
+                padding: 3px 7px;
+                cursor: pointer;
+                transition: all 0.12s ease;
+            }
+            .vx-fav-toggle:hover { border-color: rgba(240, 192, 0, 0.5); color: #e6edf3; }
+            .vx-fav-toggle.on { color: #f0c000; border-color: rgba(240, 192, 0, 0.45); }
+            /* size pills (2-10) */
+            .vx-gsizes { display: flex; gap: 3px; margin-bottom: 7px; }
+            .vx-gsize {
+                flex: 1;
+                background: #10161f;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                color: #8b949e;
+                border-radius: 5px;
+                padding: 3px 0;
+                font-size: 10px;
+                cursor: pointer;
+                transition: all 0.12s ease;
+            }
+            .vx-gsize:hover { border-color: rgba(63, 185, 80, 0.4); color: #e6edf3; }
+            .vx-gsize.on { background: rgba(63, 185, 80, 0.16); border-color: rgba(63, 185, 80, 0.5); color: #3fb950; }
+            /* view tabs: clean underline tabs */
+            .vx-gtabs {
+                display: flex;
+                gap: 8px;
+                margin-bottom: 8px;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+                padding-bottom: 4px;
+            }
+            .vx-gtab {
+                flex: 1;
+                background: transparent;
+                border: none;
+                border-bottom: 2px solid transparent;
+                color: #8b949e;
+                padding: 4px 0;
+                font-size: 11px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.12s ease;
+                text-align: center;
+            }
+            .vx-gtab:hover { color: #e6edf3; }
+            .vx-gtab.on {
+                color: #3fb950;
+                border-bottom: 2px solid #3fb950;
+                background: transparent;
+            }
+            /* table header + rows */
+            .vx-ghead, .vx-grow {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+            }
+            .vx-ghead {
+                font-size: 9px;
+                color: #6e7681;
+                text-transform: uppercase;
+                letter-spacing: 0.4px;
+                padding: 0 4px 5px;
+            }
+            .vx-grow {
+                background: #0f1620;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 6px;
+                padding: 5px 4px 5px 8px;
+                margin-bottom: 5px;
+                cursor: pointer;
+                transition: all 0.12s ease;
+            }
+            .vx-grow:last-child { margin-bottom: 0; }
+            .vx-grow:hover { border-color: rgba(63, 185, 80, 0.45); background: #111924; }
+            .vx-grow.selected-group {
+                border-color: rgba(63, 185, 80, 0.7);
+                background: rgba(63, 185, 80, 0.08);
+            }
+            .vx-gnums {
+                flex: 1;
+                min-width: 0;
+                font-size: 11px;
+                font-weight: 500;
+                color: #e6edf3;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .vx-gcell {
+                flex: 0 0 auto;
+                width: 32px;
+                text-align: right;
+                font-size: 10px;
+                color: #8b949e;
+            }
+            .vx-gcell.heat { color: #3fb950; }
+            .vx-gcell.gap.now { color: #3fb950; font-weight: 600; }
+            .vx-gcell.gap.due { color: #d6a700; }
+            .vx-gcell.gap.overdue { color: #e0913a; font-weight: 600; text-shadow: 0 0 6px rgba(224, 145, 58, 0.85); }
+            /* Combo History gap uses the same states as Hot Groups gap */
+            .vx-chgap.now { color: #3fb950; }
+            .vx-chgap.due { color: #d6a700; }
+            .vx-chgap.overdue { color: #e0913a; font-weight: 600; text-shadow: 0 0 6px rgba(224, 145, 58, 0.85); }
+            .vx-chsub sup, .vx-chmx sup { font-size: 8px; opacity: 0.75; }
+            .vx-gexp {
+                font-size: 9px;
+                color: #6e7681;
+                text-align: right;
+                padding: 2px 2px 0;
+            }
+            .vx-gtrend { display: inline-flex; vertical-align: middle; margin-right: 3px; }
+            .vx-gtrend:empty { display: none; }
+            .vx-combo-star {
+                background: transparent;
+                border: none;
+                padding: 0 2px;
+                cursor: pointer;
+                color: #3a434f;
+                display: inline-flex;
+                flex: 0 0 auto;
+                transition: color 0.12s ease;
+            }
+            .vx-combo-star:hover { color: #f0c000; }
+            .vx-combo-star.on { color: #f0c000; }
+            .vx-combos-empty {
+                font-size: 11px;
+                color: #6e7681;
+                text-align: center;
+                padding: 10px 4px;
+            }
+            .vx-combos-hint {
+                font-size: 9px;
+                color: #6e7681;
+                text-align: center;
+                padding: 7px 4px 2px;
+                line-height: 1.4;
+            }
+
+            /* ---- Smart picker ---- */
+            .vx-sp-row1 {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                margin-bottom: 8px;
+            }
+            .vx-sp-btn {
+                flex: 1;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 4px;
+                background: #141b25;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                color: #8b949e;
+                border-radius: 6px;
+                padding: 6px 4px;
+                font-size: 11px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.12s ease;
+            }
+            .vx-sp-btn:hover {
+                color: #e6edf3;
+                border-color: rgba(255, 255, 255, 0.2);
+            }
+            .vx-sp-btn.on {
+                background: rgba(63, 185, 80, 0.15);
+                border-color: rgba(63, 185, 80, 0.5);
+                color: #3fb950;
+            }
+            .vx-sp-icon {
+                font-size: 12px;
+            }
+            .vx-sp-select-wrap {
+                flex: 0 0 auto;
+            }
+            .vx-sp-select-wrap .vx-spsize {
+                padding: 6px 8px;
+                background: #10161f;
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                color: #e6edf3;
+                border-radius: 6px;
+                font-size: 11px;
+                font-weight: 600;
+                cursor: pointer;
+            }
+            .vx-sp-nums-row {
+                margin-bottom: 8px;
+            }
+            .vx-sp-nums-list {
+                background: #10161f;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 6px;
+                padding: 7px 10px;
+                font-size: 12px;
+                font-weight: 600;
+                color: #e6edf3;
+                letter-spacing: 0.5px;
+                cursor: pointer;
+                transition: border-color 0.12s ease;
+            }
+            .vx-sp-nums-list:hover {
+                border-color: rgba(63, 185, 80, 0.4);
+            }
+            .vx-sp-stats-grid {
+                display: grid;
+                grid-template-columns: repeat(5, 1fr);
+                gap: 4px;
+                background: #0f151e;
+                border: 1px solid rgba(255, 255, 255, 0.06);
+                border-radius: 6px;
+                padding: 6px 4px;
+            }
+            .vx-sp-col {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 2px;
+            }
+            .vx-sp-k {
+                font-size: 9px;
+                font-weight: 600;
+                color: #6e7681;
+                letter-spacing: 0.5px;
+            }
+            .vx-sp-v {
+                font-size: 11px;
+                font-weight: 700;
+                color: #c9d1d9;
+                font-variant-numeric: tabular-nums;
+            }
+            .vx-sp-v.pos { color: #3fb950; }
+            .vx-sp-v.neg { color: #e5534b; }
+            .vx-sp-v.now { color: #3fb950; }
+            .vx-sp-v.due { color: #d6a700; }
+            .vx-sp-v.overdue { color: #e0913a; text-shadow: 0 0 6px rgba(224, 145, 58, 0.85); }
+
            .vx-spstats b.neg, .vx-chpl.neg { color: #e5534b; }
 
            /* ---- Combo history ---- */
@@ -4407,18 +4642,68 @@
                 });
         }
 
+        gradientHeatStyle(val, minVal, maxVal) {
+            if (maxVal === minVal) {
+                return {
+                    background: 'rgb(224, 177, 70)',
+                    borderColor: 'rgba(0, 0, 0, 0.25)',
+                    color: '#111827'
+                };
+            }
+            const t = Math.max(0, Math.min(1, (val - minVal) / (maxVal - minVal)));
+            const stops = [
+                { t: 0.0, c: [229, 115, 115] },  // coral red
+                { t: 0.25, c: [243, 156, 18] },  // warm orange
+                { t: 0.5, c: [224, 177, 70] },   // amber yellow
+                { t: 0.75, c: [139, 195, 74] },  // lime green
+                { t: 1.0, c: [46, 204, 113] }    // emerald green
+            ];
+            let lower = stops[0], upper = stops[stops.length - 1];
+            for (let i = 0; i < stops.length - 1; i++) {
+                if (t >= stops[i].t && t <= stops[i + 1].t) {
+                    lower = stops[i];
+                    upper = stops[i + 1];
+                    break;
+                }
+            }
+            const range = upper.t - lower.t || 1;
+            const factor = (t - lower.t) / range;
+            const r = Math.round(lower.c[0] + (upper.c[0] - lower.c[0]) * factor);
+            const g = Math.round(lower.c[1] + (upper.c[1] - lower.c[1]) * factor);
+            const b = Math.round(lower.c[2] + (upper.c[2] - lower.c[2]) * factor);
+            const textCol = t < 0.12 ? '#ffffff' : '#111827';
+            return {
+                background: `rgb(${r}, ${g}, ${b})`,
+                borderColor: 'rgba(0, 0, 0, 0.2)',
+                color: textCol
+            };
+        }
+
         populateHeatmap() {
             const grid = this.overlay.querySelector('#overlay-keno-grid');
             if (!grid) return;
+
+            const modeBtn = this.overlay.querySelector('#overlay-heatmap-mode');
+            if (modeBtn) {
+                modeBtn.textContent = (this.heatmapMode || 'tiered').toUpperCase();
+                modeBtn.onclick = () => {
+                    this.heatmapMode = (this.heatmapMode === 'tiered') ? 'gradient' : 'tiered';
+                    modeBtn.textContent = this.heatmapMode.toUpperCase();
+                    const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
+                    browserAPI?.storage?.local?.set({ heatmapMode: this.heatmapMode });
+                    this.populateHeatmap();
+                };
+            }
 
             const N = this.numberCount;
             const hotNumbers = this.data.kenoStats.hotNumbers;
             const totalOccurrences = hotNumbers.reduce((a, b) => a + b, 0);
             const average = totalOccurrences / N; // expected draws per number
-            // Observed spread so the tint scales to it — keeps clear hot/cold
-            // contrast even once counts converge to within a few % late-game
-            // (fixed 1.4x/0.6x thresholds would wash out to near-neutral).
             const { maxAbove, maxBelow } = heatSpread(hotNumbers, average);
+
+            const minCount = Math.min(...hotNumbers);
+            const maxCount = Math.max(...hotNumbers);
+            const isGradient = this.heatmapMode === 'gradient';
 
             // Initialize cache on first run (or after a mode change cleared it)
             if (this.heatmapCells.length === 0) {
@@ -4453,11 +4738,14 @@
                     cached.momSlot.innerHTML = (state && state !== 'flat') ? this.momentumIcon(state) : '';
                 }
 
-                // Neutral gray near the average, brown above it, blue below —
-                // the shared palette the mines grid also paints with.
-                const style = totalOccurrences === 0
-                    ? HEAT_EMPTY
-                    : heatStyle(average > 0 ? occurrences / average : 1, maxAbove, maxBelow);
+                let style;
+                if (totalOccurrences === 0) {
+                    style = HEAT_EMPTY;
+                } else if (isGradient) {
+                    style = this.gradientHeatStyle(occurrences, minCount, maxCount);
+                } else {
+                    style = heatStyle(average > 0 ? occurrences / average : 1, maxAbove, maxBelow);
+                }
                 Object.assign(cached.cell.style, style);
             }
         }
@@ -4864,6 +5152,10 @@
                 return;
             }
 
+            this.currentSelectedCombo = [...numbers].sort((a, b) => a - b);
+            safe(() => this.renderSmartPicker());
+            safe(() => this.renderHotCombos());
+
             const site = this.getCurrentSite();
 
             // Winna deselects per-button inside highlightWinnaNumbers. Routing it
@@ -5026,17 +5318,16 @@
         getVarianceNumbers(externalCount = null) {
             const isLow = this.strategyToggles.variance;
             const count = externalCount ?? (isLow ? 5 : 9);
-            if (this.data.kenoStats.totalBets < 20) return this.getHotNumbers(count);
-            const useChi = this.data.kenoStats.totalBets < 50;
+            const totalBets = this.data.kenoStats.analyzedGames || Math.min(this.data.kenoStats.totalBets, 1000);
+            if (totalBets < 20) return this.getHotNumbers(count);
             const hot = this.data.kenoStats.hotNumbers;
-            if (useChi) {
-                const E = this.data.kenoStats.totalBets * 0.5;
-                return hot.map((O, i) => ({ n: i + 1, s: Math.pow(O - E, 2) / E })).sort((a, b) => b.s - a.s).slice(0, count).map(x => x.n);
-            } else {
-                const expectedPerNum = this.data.kenoStats.totalBets * 0.5;
-                const stdDev = Math.sqrt(expectedPerNum * 0.5);
-                return hot.map((o, i) => ({ n: i + 1, s: (o - expectedPerNum) / stdDev })).sort((a, b) => b.s - a.s).slice(0, count).map(x => x.n);
-            }
+            const p = (this._drawnPerGame || 10) / this.numberCount; // 0.25 on 40-grid
+            const E = totalBets * p;
+            const stdDev = Math.sqrt(totalBets * p * (1 - p)) || 1;
+            return hot.map((o, i) => ({ n: i + 1, s: (o - E) / stdDev }))
+                .sort((a, b) => b.s - a.s)
+                .slice(0, count)
+                .map(x => x.n);
         }
         selectVarianceNumbers() {
             const numbers = this.getVarianceNumbers();
@@ -5227,13 +5518,6 @@
         }
 
         // --- Strategy: Hotzone (2-D grid-block local density, chi-square gated) ---
-        // Sibling of Positional. Positional tests row/column MARGINALS, so a bias
-        // localized to a small 2-D region (a hot corner, the center) gets averaged
-        // away across its whole row and column. Hotzone instead slides a 2×2 window
-        // over the board and finds the single most over-represented block, then
-        // boosts the numbers that sit inside hot zones. Same gating discipline:
-        // weight scales with the block's significance and it falls back to Hot when
-        // no zone is statistically real.
         getHotzoneNumbers(count = 9) {
             if (this.data.kenoStats.totalBets < 30) return this.getPositionalNumbers(count);
 
@@ -5252,8 +5536,6 @@
                 return (i >= 0 && i < N) ? hot[i] : 0;
             };
 
-            // For each cell, remember the hit-count of the hottest 2×2 block it
-            // belongs to; track the most extreme block deviation for the gate.
             const blockHits = new Float32Array(N);
             let bestBlockZ = 0;
             for (let r = 0; r + H <= rows; r++) {
@@ -5272,9 +5554,6 @@
                 }
             }
 
-            // Significance gate. ~28 overlapping blocks are scanned (classic board),
-            // so the threshold is stricter than Positional's single-test gate to
-            // offset multiple comparisons. No significant zone → behave like Hot.
             let zoneWeight;
             if (bestBlockZ > 3.5) zoneWeight = 0.4;        // very strong local bias
             else if (bestBlockZ > 2.5) zoneWeight = 0.25;  // significant
@@ -5364,13 +5643,8 @@
             const scored = stats.map((s, i) => {
                 if (s.count < 3) return { n: i + 1, score: 0 };
 
-                // λ = expected gap between appearances
                 const lambda = totalBets / s.count;
-
-                // Survival probability: P(gap >= betsSince) = 1 - PoissonCDF(betsSince-1, lambda)
                 const survival = 1 - this.poissonCDF(Math.max(s.betsSince - 1, 0), lambda);
-
-                // Weight by frequency reliability
                 const reliability = Math.min(s.count / 20, 1);
 
                 return { n: i + 1, score: survival * reliability };
@@ -5385,85 +5659,8 @@
             }
             return selected.slice(0, count);
         }
-        selectTransitionNumbers() {
-            const numbers = this.getTransitionNumbers();
-            this.animateSequentialSelection(numbers);
-        }
-
-
-        // --- Strategy: Volatility (Grid Variance Analysis) ---
-        getVolatilityNumbers(count = 9) {
-            if (this.data.kenoStats.totalBets < 30) return this.getHotNumbers(count);
-
-            const stats = this.data.kenoStats.perNumberStats;
-            const hot = this.data.kenoStats.hotNumbers;
-
-            return stats
-                .map((s, i) => {
-                    if (s.count < 5 || s.entropy <= 0) return { n: i + 1, score: 0 };
-                    // High entropy = inconsistent intervals = volatile number
-                    // Boost by frequency to ensure we're not just picking noise
-                    const volatilityScore = s.entropy * Math.log(s.count + 1);
-                    return { n: i + 1, score: volatilityScore };
-                })
-                .filter(x => x.score > 0)
-                .sort((a, b) => b.score - a.score)
-                .slice(0, count)
-                .map(x => x.n);
-        }
-        selectVolatilityNumbers() {
-            const numbers = this.getVolatilityNumbers();
-            this.animateSequentialSelection(numbers);
-        }
-
-        // --- Strategy: Cohesion (NEW) ---
-        getCohesionNumbers(count = 9) {
-            if (this.data.kenoStats.totalBets < 30) return this.getSmartNumbers(count);
-            const stats = this.data.kenoStats.perNumberStats;
-            const hot = this.data.kenoStats.hotNumbers;
-
-            // Find clusters of nearby hot numbers
-            const candidates = [];
-            for (let i = 0; i < this.numberCount; i++) {
-                if (hot[i] < 2) continue;
-                const neighbors = [i - 1, i, i + 1].filter(j => j >= 0 && j < this.numberCount);
-                const neighborHeat = neighbors.reduce((sum, j) => sum + hot[j], 0);
-                candidates.push({ n: i + 1, cohesion: neighborHeat, heat: hot[i] });
-            }
-
-            return candidates
-                .sort((a, b) => b.cohesion - a.cohesion || b.heat - a.heat)
-                .slice(0, count)
-                .map(x => x.n)
-                .sort((a, b) => a - b);
-        }
-        selectCohesionNumbers() {
-            const numbers = this.getCohesionNumbers();
-            this.animateSequentialSelection(numbers);
-        }
-
-        // --- Strategy: Edge (NEW) ---
-        getEdgeNumbers(count = 9) {
-            if (this.data.kenoStats.totalBets < 25) return this.getRandomNumbers(count);
-            const hot = this.data.kenoStats.hotNumbers;
-
-            // Focus on the boundary zones (edges) of the grid
-            const N = this.numberCount;
-            const corners = [1, 2, N - 1, N];  // actual corners
-            const edges = Array.from({ length: this.numberCount }, (_, i) => i + 1).filter(n => {
-                const row = Math.floor((n - 1) / 8);
-                const col = (n - 1) % 8;
-                return row === 0 || row === 4 || col === 0 || col === 7;  // top, bottom, left, right edges
-            });
-
-            const edgeScores = edges.map(n => ({ n, heat: hot[n - 1] }))
-                .sort((a, b) => b.heat - a.heat)
-                .slice(0, count);
-
-            return edgeScores.map(x => x.n).sort((a, b) => a - b);
-        }
-        selectEdgeNumbers() {
-            const numbers = this.getEdgeNumbers();
+        selectPoissonNumbers() {
+            const numbers = this.getPoissonNumbers();
             this.animateSequentialSelection(numbers);
         }
 
@@ -5519,12 +5716,6 @@
             const numbers = this.getStreakNumbers();
             this.animateSequentialSelection(numbers);
         }
-
-        selectVolatilityNumbers() {
-            const numbers = this.getVolatilityNumbers();
-            this.animateSequentialSelection(numbers);
-        }
-
 
         // --- Strategy: EMA Hot ---
         getEMANumbers(count = 9) {
@@ -5632,8 +5823,7 @@
             other.sort((a, b) => b.score - a.score);
 
             // 70 % from the favored parity group, 30 % filler from the other
-            // This always produces a distinctly different set from plain Hot
-            const nFavored = Math.ceil(count * 0.70); // 7 of 9 (or 6 if count=8)
+            const nFavored = Math.ceil(count * 0.70);
             const nOther   = count - nFavored;
 
             return [
@@ -5809,8 +5999,6 @@
         getBalancedNumbers(count = 9) {
             if (this.data.kenoStats.totalBets < 10) return this.getSmartNumbers(count);
             const hot = this.data.kenoStats.hotNumbers;
-            // Divide the pool into 4 equal zones (e.g. 0–10, 10–20, …, 30–40 for classic;
-            // 0–14, 14–28, 28–42, 42–56 for extreme).
             const _step = this.numberCount / 4;
             const zones = [
                 { s: 0,         e: _step },
@@ -5847,12 +6035,6 @@
         }
         selectMomentumNumbers() {
             const numbers = this.getMomentumNumbers();
-            this.animateSequentialSelection(numbers);
-        }
-
-        // --- Strategy: Poisson (select wrapper — get* already in HEAD) ---
-        selectPoissonNumbers() {
-            const numbers = this.getPoissonNumbers();
             this.animateSequentialSelection(numbers);
         }
 
@@ -6228,7 +6410,7 @@
         // ==========================================================================
 
         getDeltaPatternNumbers(count = 9) {
-            const siteKey = `${window.location.origin}-keno-session`;
+            const siteKey = `${this.storageOrigin}-keno-session`;
             const results = (this.cachedKenoResults?.[siteKey] || []).slice(0, 50);
             if (results.length < 30) return this.getHotNumbers(count);
             const deltas = [];
@@ -6251,9 +6433,14 @@
             for (let i = 0; i < bestDeltas.length && selected.length < count; i++) {
                 curr += bestDeltas[i];
                 if (curr > this.numberCount) curr -= this.numberCount;
+                if (curr < 1) curr += this.numberCount;
                 if (!selected.includes(curr)) selected.push(curr);
             }
-            return selected;
+            if (selected.length < count) {
+                const fillers = this.getHotNumbers(count * 2).filter(n => !selected.includes(n));
+                selected.push(...fillers.slice(0, count - selected.length));
+            }
+            return selected.slice(0, count);
         }
         selectDeltaPatternNumbers() {
             const numbers = this.getDeltaPatternNumbers();
