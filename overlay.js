@@ -177,7 +177,7 @@
 
                 // Row 2: Statistical Analysis
                 overdue: { name: "Overdue", method: "Regression to Mean", description: "Selects numbers with highest overdue score (betsSince > 1.5x avgInterval). Uses regression to mean theory to find 'due' numbers.", usage: "Best for: Exploiting mean reversion on numbers that should appear soon." },
-                variance: { name: "Variance", method: "Chi-Square/Z-Score", description: "Uses statistical tests (Chi-Square or Z-Score) to find numbers with significant deviations from expected frequency.", usage: "Best for: High-confidence statistical analysis." },
+                variance: { name: "Variance", method: "Z-Score Deficit", description: "Z-score deficit over the recent window: how far each number sits BELOW the 0.25-per-game expectation across the last ~120 draws. Picks what is starved lately, which is a different set from Cold (lowest all-time count).", usage: "Best for: Playing a recent drought rather than an all-time cold streak." },
                 positional: { name: "Positional", method: "Grid Zone Analysis + Chi-Square", description: "Analyzes 8x5 grid with chi-square validation to detect statistically significant row/column biases (p<0.05).", usage: "Best for: Scientific detection of spatial RNG biases. Top performer on Stake!" },
                 hotzone: { name: "Hotzone", method: "2-D Grid-Block Density", description: "Sibling of Positional that scans 2×2 blocks of the board instead of whole rows/columns, so it catches a bias localized to a corner or the center that row/column averages dilute away. Z-score gated; weights the spatial signal by block significance and falls back to Hot when no zone is real.", usage: "Best for: Localized spatial RNG hotspots that Positional's marginals miss." },
                 progressive: { name: "Progressive", method: "Momentum Analysis", description: "Calculates a momentum score (frequency / recency) to find accelerating numbers.", usage: "Best for: Spotting numbers heating up now." },
@@ -5315,17 +5315,40 @@
         }
 
         // --- Strategy: Variance ---
+        // Numbers running furthest BELOW their expected frequency, by z-score.
+        //
+        // This ranked (observed − expected) descending, which selects the most
+        // OVER-drawn numbers — the same end of the board as Hot, so the two
+        // strategies largely returned the same ticket. Scoring the deficit
+        // instead gives Variance its own half of the distribution.
+        //
+        // Kept as a plain z-score, deliberately: the Stats picker already
+        // weights the same deficit by how overdue each number is, so leaving
+        // that out here keeps the two distinguishable — Variance is the pure
+        // statistical reading, Stats the one that also chases the gap.
         getVarianceNumbers(externalCount = null) {
             const isLow = this.strategyToggles.variance;
             const count = externalCount ?? (isLow ? 5 : 9);
-            const totalBets = this.data.kenoStats.analyzedGames || Math.min(this.data.kenoStats.totalBets, 1000);
-            if (totalBets < 20) return this.getHotNumbers(count);
-            const hot = this.data.kenoStats.hotNumbers;
-            const p = (this._drawnPerGame || 10) / this.numberCount; // 0.25 on 40-grid
-            const E = totalBets * p;
-            const stdDev = Math.sqrt(totalBets * p * (1 - p)) || 1;
-            return hot.map((o, i) => ({ n: i + 1, s: (o - E) / stdDev }))
-                .sort((a, b) => b.s - a.s)
+            const games = this.data.kenoStats.analyzedGames || Math.min(this.data.kenoStats.totalBets, 1000);
+            if (games < 20) return this.getHotNumbers(count);
+            const N = this.numberCount;
+            const p = (this._drawnPerGame || 10) / N; // 0.25 on a 40-grid
+            // Deficit over a recent window, not the whole session. Ranking the
+            // all-time deficit would be a monotone transform of the raw hit
+            // count — the exact ordering Cold already gives — because every
+            // number shares the same expectation. Scoring the window instead
+            // finds numbers starved LATELY, which a number can be while still
+            // sitting mid-table all-time.
+            const window = Math.max(40, Math.min(120, Math.floor(games / 2)));
+            const draws = this.getRecentDraws(window);
+            const w = draws.length;
+            if (w < 20) return this.getColdNumbers(count);
+            const seen = new Array(N + 1).fill(0);
+            for (const d of draws) for (const n of d) if (n >= 1 && n <= N) seen[n]++;
+            const E = w * p;
+            const stdDev = Math.sqrt(w * p * (1 - p)) || 1;
+            return Array.from({ length: N }, (_, i) => ({ n: i + 1, s: (E - seen[i + 1]) / stdDev }))
+                .sort((a, b) => b.s - a.s) // + = under-drawn in the window
                 .slice(0, count)
                 .map(x => x.n);
         }
