@@ -33,6 +33,18 @@
     // blue edge below. `ratio` is observed/expected; maxAbove/maxBelow are the
     // observed spread either side of 1, so the tint scales to the data instead
     // of washing out once counts converge.
+    // What each strategy is worth playing at when the spot control is on Auto.
+    // A gap read is strongest on its few most extreme numbers; a coverage read
+    // is about spread and wants a wide ticket; the frequency reads sit in the
+    // 4-6 band where hit frequency and payout balance out. Anything not listed
+    // uses SPOTS_DEFAULT.
+    const SPOTS_DEFAULT = 6;
+    const STRATEGY_SPOTS = {
+        overdue: 4, repeat: 4, drought: 4, streak: 4, volatility: 4,
+        wheeling: 5, anticluster: 8, coverage: 8, portfolio: 8, balanced: 8,
+        sector: 6, hotzone: 6, positional: 6, digitbias: 6, parity: 6
+    };
+
     const HEAT = {
         top: [47, 56, 69], bot: [36, 44, 56], border: [72, 80, 94],
         hotFill: [112, 74, 38], hotEdge: [206, 138, 60],
@@ -104,6 +116,9 @@
             this.smartPickView = 'pattern';
             this.smartPickSize = 6;
             this.heatmapMode = 'tiered';
+            // Spot count for the strategy tiles: 'auto' runs each strategy at its
+            // own tuned size, a number pins every strategy to that size.
+            this.spotMode = 'auto';
             this.currentSelectedCombo = null;
             // Strategy grid view: 'main' (core 16) or 'alt' (alternative set).
             this.strategyView = 'main';
@@ -118,14 +133,18 @@
             this._storageListeners = [];
             // Bump when the curated main/drawer strategy set changes so a stale saved
             // strategyOrder/sideDrawerStrategies is reset to the new defaults once.
-            this.LAYOUT_VERSION = 3;
+            this.LAYOUT_VERSION = 4;
 
             const browserAPI = (typeof browser !== 'undefined' && browser?.storage) ? browser :
                 (typeof chrome !== 'undefined' && chrome?.storage) ? chrome : null;
             if (browserAPI && browserAPI.storage && browserAPI.storage.local) {
-                browserAPI.storage.local.get(['strategyToggles', 'comboFavorites', 'heatmapMode'], (result) => {
+                browserAPI.storage.local.get(['strategyToggles', 'comboFavorites', 'heatmapMode', 'spotMode'], (result) => {
                     if (result && result.strategyToggles) {
                         this.strategyToggles = result.strategyToggles;
+                    }
+                    if (result && (result.spotMode === 'auto' || Number(result.spotMode) >= 2)) {
+                        this.spotMode = result.spotMode === 'auto' ? 'auto' : Number(result.spotMode);
+                        safe(() => this.renderSpotControl());
                     }
                     if (result && result.heatmapMode) {
                         this.heatmapMode = result.heatmapMode;
@@ -177,9 +196,9 @@
 
                 // Row 2: Statistical Analysis
                 overdue: { name: "Overdue", method: "Regression to Mean", description: "Selects numbers with highest overdue score (betsSince > 1.5x avgInterval). Uses regression to mean theory to find 'due' numbers.", usage: "Best for: Exploiting mean reversion on numbers that should appear soon." },
-                variance: { name: "Variance", method: "Chi-Square/Z-Score", description: "Uses statistical tests (Chi-Square or Z-Score) to find numbers with significant deviations from expected frequency.", usage: "Best for: High-confidence statistical analysis." },
+                variance: { name: "Variance", method: "Z-Score Deficit", description: "Z-score deficit over the recent window: how far each number sits BELOW the 0.25-per-game expectation across the last ~120 draws. Picks what is starved lately, which is a different set from Cold (lowest all-time count).", usage: "Best for: Playing a recent drought rather than an all-time cold streak." },
                 positional: { name: "Positional", method: "Grid Zone Analysis + Chi-Square", description: "Analyzes 8x5 grid with chi-square validation to detect statistically significant row/column biases (p<0.05).", usage: "Best for: Scientific detection of spatial RNG biases. Top performer on Stake!" },
-                hotzone: { name: "Hotzone", method: "2-D Grid-Block Density", description: "Sibling of Positional that scans 2×2 blocks of the board instead of whole rows/columns, so it catches a bias localized to a corner or the center that row/column averages dilute away. Z-score gated; weights the spatial signal by block significance and falls back to Hot when no zone is real.", usage: "Best for: Localized spatial RNG hotspots that Positional's marginals miss." },
+                hotzone: { name: "Hotzone", method: "2-D Block Z-Score → Gap", description: "Scans 2×2 and larger blocks of the board for a locally significant bias (z > 2.5), then picks the most overdue numbers inside the strongest blocks. Hands back Hot when no block stands out, rather than dressing up the same ranking.", usage: "Best for: Localized spatial bias that row/column averages dilute away." },
                 progressive: { name: "Progressive", method: "Momentum Analysis", description: "Calculates a momentum score (frequency / recency) to find accelerating numbers.", usage: "Best for: Spotting numbers heating up now." },
 
                 // Row 3: Advanced Methods
@@ -192,31 +211,31 @@
                 volatility: { name: "Volatility", method: "Grid Variance Analysis", description: "Analyzes coefficient of variation in number frequencies to find positions with high statistical volatility. Targets unpredictable but due numbers.", usage: "Best for: Sequential draw dependency — catches patterns temporal misses." },
                 // Row 5: Precision Methods
                 ema: { name: "EMA", method: "Exponential Moving Average", description: "Recency-weighted frequency with decay alpha=0.15. Recent games count ~6x more than old ones. Superior to Hot for shifting patterns.", usage: "Best for: Live sessions where trends evolve fast." },
-                digitbias: { name: "Digit Bias", method: "Last-Digit Chi-Square", description: "Tests whether numbers ending in 0-9 are drawn at statistically unequal rates. Uses chi-square significance gate (p<0.05, df=9) — falls back to Hot when distribution is uniform.", usage: "Best for: Sites with systematic single-digit RNG skew." },
+                digitbias: { name: "Digit", method: "Family Z-Score → Gap", description: "Groups numbers by last digit, scores each family against its expected share of the draws, then picks the most overdue numbers inside the families that clear significance. The family decides the pool; the gap decides the numbers.", usage: "Best for: A board where whole digit families run above their share." },
                 parity: { name: "Parity", method: "Even/Odd Binomial Z-Test", description: "Tests whether even or odd numbers are being drawn at unequal rates. Binomial z-test (p<0.05) — boosts the favored parity class weighted by individual frequency. Works from game 5.", usage: "Best for: Sessions with persistent even/odd draw imbalance." },
 
                 // Row 7: Meta Strategies
                 adaptive: { name: "Adaptive", method: "Session Meta-Strategy", description: "Queries AI performance scores and blends the top 2 recommended strategies weighted by their recent win rates. Dynamically updates as session patterns shift.", usage: "Best for: Any session length. The strategy that picks your strategy." },
                 regime: { name: "Regime", method: "CUSUM Change-Point Detection", description: "Uses CUSUM algorithm to detect if the session has shifted into a hot or cold distributional regime. Switches between Hot-biased and Cold-biased blends automatically based on detected regime.", usage: "Best for: Long sessions (50+ games) where RNG drift is expected." },
                 // New strategies
-                cohesion: { name: "Cohesion", method: "Cluster Travel Analysis", description: "Measures how well a number travels with the current hot cluster. Very strong on biased RNGs.", usage: "Best for: Finding numbers that cluster with current hot numbers." },
+                sector: { name: "Sector", method: "Recent Row/Column Bias", description: "Scores every row and column over the last ~60 draws against its expected share, takes the two strongest, and picks the most overdue numbers inside them. Positional reads the whole session, so it cannot see a bias that started recently.", usage: "Best for: A board where one band has started running hot." },
                 edge: { name: "Edge", method: "Kelly-Inspired Meta", description: "Kelly-inspired: favors strategies that performed well recently (uses legend/legendHits if available).", usage: "Best for: Meta-analysis of strategy performance." },
                 // User-pasted strategies (2026-05-13)
                 delta: { name: "Delta", method: "Sequential Gap Pattern", description: "Analyzes deltas (gaps) between numbers in past winning combinations. Picks the most-frequent delta pattern, anchors on the hottest number, then walks the pattern around the 1-40 ring.", usage: "Best for: Sessions of 30+ games where gap structure may repeat." },
                 regression: { name: "Regression", method: "Linear Trend on Intervals", description: "Linear regression on each number's last 15 occurrence intervals. Scores numbers with statistically meaningful negative slope (decreasing gaps → accelerating). r² > 0.25 gate.", usage: "Best for: 40+ games. Only meaningful if the RNG drifts." },
                 portfolio: { name: "Portfolio", method: "Sharpe-Style Heat/Risk", description: "Heat ÷ entropy as a Sharpe-like ratio. Favors numbers with strong heat AND low variance in their interval pattern.", usage: "Best for: Variance reduction. Doesn't change EV." },
-                comboways: { name: "Cluster", method: "Co-Occurrence Clustering", description: "Builds a set from numbers that land together in the same draws — seeds from the hottest number and grows by total co-occurrence — so the pick clusters tightly for more partial-match coverage.", usage: "Best for: Sessions where certain numbers keep showing up together." },
-                condbonus: { name: "Pulse", method: "Recency × Frequency", description: "Scores each number by overall frequency × how recently it last hit, boosted by hits in the last 20 draws — surfacing numbers that are frequent AND active right now.", usage: "Best for: Riding numbers heating up in the current session." },
+                anticluster: { name: "Anti-Cluster", method: "Minimum Co-Occurrence", description: "The mirror of Wheeling: greedily builds a set of numbers that have AVOIDED each other in your draws, spreading the ticket across independent draws instead of stacking it on one cluster.", usage: "Best for: More chances at a small hit rather than one big simultaneous one." },
+                realised: { name: "Realised", method: "Return per Unit Staked", description: "Reads your BET history rather than the draws: for every number, the money your paid bets containing it actually returned per unit staked, shrunk toward break-even so one lucky bet cannot top the table. Needs 10+ paid bets.", usage: "Best for: Leaning on what has actually paid you, not what has merely been drawn." },
                 // Re-added historical strategies
                 bayesian: { name: "Bayesian", method: "Dynamic Posterior Update", description: "Maintains a Bayesian posterior for each number's hit probability, updating after every draw. Selects numbers with the highest posterior-weighted scores.", usage: "Best for: Statistically grounded probability estimates that sharpen with more data." },
                 montecarlo: { name: "MonteCarlo", method: "200-Sim Weighted Sampling", description: "Runs 200 simulations of future draws using empirical frequencies, then picks the 9 numbers that appear most across all simulations.", usage: "Best for: Robust picks under uncertainty — smooths over small-sample noise." },
                 coverage: { name: "Coverage", method: "Hot + Max-Spread Hybrid", description: "Selects top hot numbers plus additional numbers that maximize coverage of the board, combining frequency bias with spatial spread.", usage: "Best for: Maximizing partial hits by covering both hot zones and gaps." },
                 wheeling: { name: "Wheeling", method: "Correlation-Based Expansion", description: "Seeds from the hottest number then expands by finding its most correlated partners — numbers that frequently appear together.", usage: "Best for: Sites with co-occurrence data. Builds a synergistic set." },
-                timeseries: { name: "Forecast", method: "EMA on Intervals", description: "Applies exponential moving average to each number's inter-draw intervals. Selects numbers whose EMA interval predicts imminent appearance.", usage: "Best for: Sessions with identifiable cyclical timing patterns." },
+                drought: { name: "Drought", method: "Rate vs Its Own Pace", description: "Numbers whose recent rate has fallen furthest below THEIR OWN session pace — not below the flat expectation. A number can run hot all session and still be in a personal drought right now.", usage: "Best for: A dip in a number that has otherwise been good to you." },
                 balanced: { name: "Balanced", method: "Zone-Based Coverage", description: "Divides the board into zones (low/mid/high) and selects proportional representatives from each, ensuring no zone is over- or under-represented.", usage: "Best for: Avoiding clustering bias — maximizes board coverage systematically." },
                 momentum: { name: "Momentum", method: "Recent-Interval Acceleration", description: "Scores each number by comparing its recent gap intervals to its long-term average. Numbers appearing faster than usual get high momentum scores.", usage: "Best for: Spotting numbers whose appearance rate is currently accelerating." },
                 poisson: { name: "Poisson", method: "Poisson Survival Probability", description: "Models each number's gap as a Poisson process (λ = avgInterval). Scores by survival probability — how overdue a number is relative to its expected rate.", usage: "Best for: 50+ games. The most statistically grounded gap strategy." },
-                gapextremes: { name: "Extreme", method: "Z-Score Gap Analysis", description: "Uses standardized z-scores to find numbers with statistically extreme current gaps — either extremely overdue or on a hot streak. Targets both extremes.", usage: "Best for: High-conviction plays on statistical outliers at either end." }
+                repeat: { name: "Repeat", method: "Lag-1 Autocorrelation", description: "Given a number was drawn, how often it was drawn again in the very next game, against the 0.25 chance rate and shrunk toward it. The only strategy that reads draw ORDER — every other one treats the session as an unordered pile of counts.", usage: "Best for: Boards where numbers come in back-to-back runs." }
             };
 
             this.initialize();
@@ -357,6 +376,7 @@
         initKenoMode() {
             this.heatmapCells.length = 0; // fresh grid nodes after a remount
             this.setupQuickActions();
+            this.renderSpotControl();
             this.populateHeatmap();
             this.updateUI();
             this.updateAIRecommendation(); // Update AI recommendation on init
@@ -389,7 +409,9 @@
                 return;
             }
 
-            browserAPI.storage.local.get(['kenoResults', 'lastDrawnNumbers', 'kenoTotalBets'], (result) => {
+            browserAPI.storage.local.get(
+                ['kenoResults', 'lastDrawnNumbers', 'kenoTotalBets', 'legendStats', 'kenoStrategyPerformance'],
+                (result) => {
                 if (browserAPI.runtime?.lastError) {
                     console.error('Error loading data from storage:', browserAPI.runtime.lastError.message);
                     return;
@@ -399,6 +421,11 @@
                 // already shows it.
                 this.data.kenoStats.lifetimeBets =
                     result?.kenoTotalBets?.[`${this.storageOrigin}-keno-session`] ?? 0;
+                // Adaptive weights strategies by their big-hit rate. Both halves
+                // of that live in background state and were never read here, so
+                // the bonus silently evaluated to 1 for every strategy.
+                this.data.legendStats = result?.legendStats || {};
+                this.data.kenoStrategyPerformance = result?.kenoStrategyPerformance || {};
                 this.processKenoData(result?.kenoResults);
                 if (result?.lastDrawnNumbers) {
                     this.data.kenoStats.lastDrawn = result.lastDrawnNumbers;
@@ -580,7 +607,6 @@
 
         updateUI() {
             this.updateStatusBar();
-            this.updateStrategyPLBadges();
             this.renderInsights();
         }
 
@@ -2203,6 +2229,7 @@
                         <div class="vx-strat-toggle" id="overlay-strat-toggle">
                             <button class="vx-st-btn on" data-stratview="main">Core</button>
                             <button class="vx-st-btn" data-stratview="alt">Alternative</button>
+                            <span class="vx-spots" id="overlay-spots"></span>
                         </div>
                         <div class="quick-actions-grid" id="overlay-quick-actions">
                             </div>
@@ -2259,22 +2286,22 @@
                 parity: '<path d="M12 3v18"/><path d="M5 7h14"/><path d="M5 7 2 13a3 3 0 0 0 6 0z"/><path d="M19 7l-3 6a3 3 0 0 0 6 0z"/><path d="M8 21h8"/>',
                 adaptive: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
                 regime: '<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>',
-                cohesion: '<path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/>',
+                sector: '<path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/>',
                 edge: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
                 delta: '<path d="M12 4 4 19h16z"/>',
                 regression: '<path d="M21.3 8.7 8.7 21.3a1 1 0 0 1-1.4 0l-4.6-4.6a1 1 0 0 1 0-1.4L15.3 2.7a1 1 0 0 1 1.4 0l4.6 4.6a1 1 0 0 1 0 1.4z"/><path d="m7.5 10.5 2 2"/><path d="m10.5 7.5 2 2"/><path d="m13.5 4.5 2 2"/>',
                 portfolio: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>',
-                comboways: '<line x1="7" y1="7" x2="16" y2="9"/><line x1="7" y1="7" x2="9" y2="16"/><line x1="16" y1="9" x2="17" y2="17"/><line x1="9" y1="16" x2="17" y2="17"/><circle cx="7" cy="7" r="2.2"/><circle cx="16" cy="9" r="2.2"/><circle cx="9" cy="16" r="2.2"/><circle cx="17" cy="17" r="2.2"/>',
-                condbonus: '<path d="M2 12h4l3 8 4-16 3 8h6"/>',
+                anticluster: '<line x1="7" y1="7" x2="16" y2="9"/><line x1="7" y1="7" x2="9" y2="16"/><line x1="16" y1="9" x2="17" y2="17"/><line x1="9" y1="16" x2="17" y2="17"/><circle cx="7" cy="7" r="2.2"/><circle cx="16" cy="9" r="2.2"/><circle cx="9" cy="16" r="2.2"/><circle cx="17" cy="17" r="2.2"/>',
+                realised: '<path d="M2 12h4l3 8 4-16 3 8h6"/>',
                 bayesian: '<path d="M4 4h16"/><path d="m4 4 8 8-8 8h16"/>',
                 montecarlo: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1"/><circle cx="15.5" cy="8.5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="8.5" cy="15.5" r="1"/><circle cx="15.5" cy="15.5" r="1"/>',
                 coverage: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
                 wheeling: '<circle cx="12" cy="12" r="9"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/><line x1="18.4" y1="5.6" x2="5.6" y2="18.4"/>',
-                timeseries: '<polyline points="3 18 8 13 12 16 21 6"/><circle cx="8" cy="13" r="1"/><circle cx="12" cy="16" r="1"/>',
+                drought: '<polyline points="3 18 8 13 12 16 21 6"/><circle cx="8" cy="13" r="1"/><circle cx="12" cy="16" r="1"/>',
                 balanced: '<path d="M12 3v18"/><path d="M5 7h14"/><path d="M5 7 2 13a3 3 0 0 0 6 0z"/><path d="M19 7l-3 6a3 3 0 0 0 6 0z"/><path d="M8 21h8"/>',
                 momentum: '<path d="M9.59 4.59A2 2 0 1 1 11 8H2"/><path d="M17 12a2 2 0 1 0 2 2H2"/><path d="M14.83 19.41A2 2 0 1 0 16 23H2"/>',
                 poisson: '<path d="M6.5 12c.94-3.46 4.94-6 8.5-6 3.56 0 6.06 2.54 7 6-.94 3.47-3.44 6-7 6s-7.56-2.53-8.5-6z"/><circle cx="16" cy="10" r="1"/><path d="M2 12s2 2 4 2"/>',
-                gapextremes: '<polyline points="8 7 3 12 8 17"/><polyline points="16 7 21 12 16 17"/><line x1="3" y1="12" x2="21" y2="12"/>'
+                repeat: '<polyline points="8 7 3 12 8 17"/><polyline points="16 7 21 12 16 17"/><line x1="3" y1="12" x2="21" y2="12"/>'
             };
             const inner = P[strategyId] || '<path d="M13 2 3 14h7v8l10-12h-7z"/>';
             return `<svg class="vx-strat-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -2301,7 +2328,7 @@
                 { id: 'streak', name: 'Streak' },
 
                 // Row 3 - Precision & Meta
-                { id: 'cohesion', name: 'Cohesion' }, // new
+                { id: 'sector', name: 'Sector' },
                 { id: 'entropy', name: 'Entropy' },
                 { id: 'digitbias', name: 'Digit' },
                 { id: 'positional', name: 'Positional' },
@@ -2387,9 +2414,9 @@
                 </div>
             `).join('');
             this.setupAltGridInteractions();
+            safe(() => this.refreshSpotBadges());
             // Re-apply the AI gold-glow if its pick lives in this view.
             safe(() => this.updateAIRecommendation());
-            this.updateStrategyPLBadges();
         }
 
         // Click + drag-to-swap for the Alt grid. Mirrors setupStrategyInteractions
@@ -2506,7 +2533,7 @@
                 </div>
             `).join('');
             this.setupStrategyInteractions();
-            this.updateStrategyPLBadges();
+            safe(() => this.refreshSpotBadges());
         }
 
         getStrategyName(id) {
@@ -2605,16 +2632,16 @@
             { id: 'delta', name: 'Delta' },
             { id: 'regression', name: 'Regression' },
             { id: 'portfolio', name: 'Portfolio' },
-            { id: 'comboways', name: 'Cluster' },
-            { id: 'condbonus', name: 'Pulse' },
+            { id: 'anticluster', name: 'Anti-Cluster' },
+            { id: 'realised', name: 'Realised' },
             { id: 'bayesian', name: 'Bayesian' },
             { id: 'coverage', name: 'Coverage' },
             { id: 'wheeling', name: 'Wheeling' },
-            { id: 'timeseries', name: 'Forecast' },
+            { id: 'drought', name: 'Drought' },
             { id: 'balanced', name: 'Balanced' },
             { id: 'momentum', name: 'Momentum' },
             { id: 'poisson', name: 'Poisson' },
-            { id: 'gapextremes', name: 'Extreme' }
+            { id: 'repeat', name: 'Repeat' }
         ];
 
         populateSideDrawer() {
@@ -2736,23 +2763,23 @@
                 'parity': 'selectParityNumbers',
                 'adaptive': 'selectAdaptiveNumbers',
                 'regime': 'selectRegimeNumbers',
-                'cohesion': 'selectCohesionNumbers',
+                'sector': 'selectSectorRotationNumbers',
                 'edge': 'selectEdgeNumbers',
                 'delta': 'selectDeltaPatternNumbers',
                 'regression': 'selectRegressionNumbers',
                 'portfolio': 'selectPortfolioNumbers',
-                'comboways': 'selectCombinatorialWaysNumbers',
-                'condbonus': 'selectConditionalBonusNumbers',
+                'anticluster': 'selectAntiClusterNumbers',
+                'realised': 'selectRealisedReturnNumbers',
                 // Re-added historical strategies
                 'bayesian': 'selectBayesianNumbers',
                 'montecarlo': 'selectMonteCarloNumbers',
                 'coverage': 'selectCoverageNumbers',
                 'wheeling': 'selectWheelingNumbers',
-                'timeseries': 'selectTimeSeriesNumbers',
+                'drought': 'selectDroughtReboundNumbers',
                 'balanced': 'selectBalancedNumbers',
                 'momentum': 'selectMomentumNumbers',
                 'poisson': 'selectPoissonNumbers',
-                'gapextremes': 'selectGapExtremesNumbers'
+                'repeat': 'selectRepeatChaserNumbers'
             };
             return map[strategyId];
         }
@@ -2771,9 +2798,7 @@
                     this.setActiveButton(strategyId);
                     // Run strategy immediately — sendMessage is fire-and-forget after
                     const methodName = this.getSelectMethodName(strategyId);
-                    if (methodName && typeof this[methodName] === 'function') {
-                        this[methodName]();
-                    }
+                    this.runStrategy(strategyId, methodName);
                     if (typeof browser !== 'undefined' && browser.runtime) {
                         browser.runtime.sendMessage({
                             type: 'SET_ACTIVE_STRATEGY',
@@ -2986,9 +3011,7 @@
                             'variance': 'selectVarianceNumbers'
                         };
                         const methodName = methodMap[strategyId];
-                        if (methodName && typeof this[methodName] === 'function') {
-                            this[methodName]();
-                        }
+                        this.runStrategy(strategyId, methodName);
                     });
 
                     // Add drag listeners (simplified)
@@ -3071,9 +3094,7 @@
                     // Auto-click Keno numbers — use the complete method map so any
                     // strategy works here, including ones dragged in from the drawer.
                     const methodName = this.getSelectMethodName(strategyId);
-                    if (methodName && typeof this[methodName] === 'function') {
-                        this[methodName]();
-                    }
+                    this.runStrategy(strategyId, methodName);
                 });
 
                 // Drag listeners — use this.dragSource so side drawer can swap with us
@@ -3624,9 +3645,37 @@
            /* ---- Core/Alternative strategy toggle ---- */
            .vx-strat-toggle {
                display: flex;
+               align-items: center;
                gap: 4px;
                margin-bottom: 8px;
            }
+           .vx-spots { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+           .vx-spot-auto, .vx-spot-sel {
+               background: #10161f;
+               border: 1px solid rgba(255, 255, 255, 0.10);
+               color: #8b949e;
+               border-radius: 6px;
+               padding: 3px 7px;
+               font-family: inherit;
+               font-size: 10px;
+               font-weight: 600;
+               cursor: pointer;
+           }
+           .vx-spot-auto.on { background: rgba(63, 185, 80, 0.16); border-color: rgba(63, 185, 80, 0.5); color: #3fb950; }
+           .vx-spot-sel { padding: 3px 2px; }
+           .vx-spot-k { font-size: 9px; color: #6e7681; text-transform: uppercase; letter-spacing: 0.5px; }
+           .action-item { position: relative; }
+           .vx-spot-badge {
+               position: absolute;
+               top: 2px;
+               right: 4px;
+               font-size: 8px;
+               font-weight: 700;
+               color: #6e7681;
+               font-variant-numeric: tabular-nums;
+               pointer-events: none;
+           }
+           .vx-spot-badge.pinned { color: #3fb950; }
            .vx-st-btn {
                flex: 1;
                background: transparent;
@@ -5234,6 +5283,61 @@
         // STRATEGY IMPLEMENTATIONS
         // ================================================================
 
+        // Spots a strategy runs at: the pin if one is set, else its tuned size.
+        spotsFor(strategyId) {
+            if (this.spotMode !== 'auto') return Math.max(1, Math.min(10, Number(this.spotMode) || SPOTS_DEFAULT));
+            return STRATEGY_SPOTS[strategyId] || SPOTS_DEFAULT;
+        }
+
+        renderSpotControl() {
+            const el = this.overlay?.querySelector('#overlay-spots');
+            if (!el) return;
+            const pinned = this.spotMode !== 'auto';
+            const opts = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+                .map(n => `<option value="${n}" ${pinned && Number(this.spotMode) === n ? 'selected' : ''}>${n}</option>`).join('');
+            el.innerHTML = `
+                <button class="vx-spot-auto ${pinned ? '' : 'on'}" id="overlay-spots-auto"
+                    title="Auto — each strategy runs at its own size: gap reads 4, frequency reads 6, coverage reads 8. Pick a number instead to pin every strategy to it.">Auto</button>
+                <select class="vx-spot-sel" id="overlay-spots-sel" title="Pin every strategy to this many numbers">
+                    <option value="" ${pinned ? '' : 'selected'}>–</option>${opts}
+                </select>
+                <span class="vx-spot-k">spots</span>`;
+            const setMode = (mode) => {
+                this.spotMode = mode;
+                const api = (typeof browser !== 'undefined') ? browser : chrome;
+                safe(() => api?.storage?.local?.set({ spotMode: mode }));
+                this.renderSpotControl();
+                safe(() => this.refreshSpotBadges());
+            };
+            el.querySelector('#overlay-spots-auto').onclick = () => setMode('auto');
+            el.querySelector('#overlay-spots-sel').onchange = (e) => {
+                const v = e.target.value;
+                setMode(v === '' ? 'auto' : Number(v));
+            };
+            safe(() => this.refreshSpotBadges());
+        }
+
+        // Show on each tile how many numbers it will fill, so a click is never
+        // a surprise — the strategy's own size on Auto, the pin when pinned.
+        refreshSpotBadges() {
+            const items = [
+                ...(this.overlay?.querySelectorAll('.action-item') || []),
+                ...document.querySelectorAll('#overlay-side-actions .action-item')
+            ];
+            items.forEach(item => {
+                const id = item.dataset.strategyId;
+                if (!id) return;
+                let badge = item.querySelector('.vx-spot-badge');
+                if (!badge) {
+                    badge = document.createElement('span');
+                    badge.className = 'vx-spot-badge';
+                    item.appendChild(badge);
+                }
+                badge.textContent = this.spotsFor(id);
+                badge.classList.toggle('pinned', this.spotMode !== 'auto');
+            });
+        }
+
         // --- Strategy: Hot ---
         getHotNumbers(count = 9) {
             return this.data.kenoStats.hotNumbers
@@ -5315,17 +5419,40 @@
         }
 
         // --- Strategy: Variance ---
+        // Numbers running furthest BELOW their expected frequency, by z-score.
+        //
+        // This ranked (observed − expected) descending, which selects the most
+        // OVER-drawn numbers — the same end of the board as Hot, so the two
+        // strategies largely returned the same ticket. Scoring the deficit
+        // instead gives Variance its own half of the distribution.
+        //
+        // Kept as a plain z-score, deliberately: the Stats picker already
+        // weights the same deficit by how overdue each number is, so leaving
+        // that out here keeps the two distinguishable — Variance is the pure
+        // statistical reading, Stats the one that also chases the gap.
         getVarianceNumbers(externalCount = null) {
             const isLow = this.strategyToggles.variance;
             const count = externalCount ?? (isLow ? 5 : 9);
-            const totalBets = this.data.kenoStats.analyzedGames || Math.min(this.data.kenoStats.totalBets, 1000);
-            if (totalBets < 20) return this.getHotNumbers(count);
-            const hot = this.data.kenoStats.hotNumbers;
-            const p = (this._drawnPerGame || 10) / this.numberCount; // 0.25 on 40-grid
-            const E = totalBets * p;
-            const stdDev = Math.sqrt(totalBets * p * (1 - p)) || 1;
-            return hot.map((o, i) => ({ n: i + 1, s: (o - E) / stdDev }))
-                .sort((a, b) => b.s - a.s)
+            const games = this.data.kenoStats.analyzedGames || Math.min(this.data.kenoStats.totalBets, 1000);
+            if (games < 20) return this.getHotNumbers(count);
+            const N = this.numberCount;
+            const p = (this._drawnPerGame || 10) / N; // 0.25 on a 40-grid
+            // Deficit over a recent window, not the whole session. Ranking the
+            // all-time deficit would be a monotone transform of the raw hit
+            // count — the exact ordering Cold already gives — because every
+            // number shares the same expectation. Scoring the window instead
+            // finds numbers starved LATELY, which a number can be while still
+            // sitting mid-table all-time.
+            const window = Math.max(40, Math.min(120, Math.floor(games / 2)));
+            const draws = this.getRecentDraws(window);
+            const w = draws.length;
+            if (w < 20) return this.getColdNumbers(count);
+            const seen = new Array(N + 1).fill(0);
+            for (const d of draws) for (const n of d) if (n >= 1 && n <= N) seen[n]++;
+            const E = w * p;
+            const stdDev = Math.sqrt(w * p * (1 - p)) || 1;
+            return Array.from({ length: N }, (_, i) => ({ n: i + 1, s: (E - seen[i + 1]) / stdDev }))
+                .sort((a, b) => b.s - a.s) // + = under-drawn in the window
                 .slice(0, count)
                 .map(x => x.n);
         }
@@ -5554,18 +5681,21 @@
                 }
             }
 
-            let zoneWeight;
-            if (bestBlockZ > 3.5) zoneWeight = 0.4;        // very strong local bias
-            else if (bestBlockZ > 2.5) zoneWeight = 0.25;  // significant
-            else return this.getHotNumbers(count);
+            // No block stands out — say so by handing back Hot rather than
+            // dressing the same ranking up as a zone read.
+            if (bestBlockZ <= 2.5) return this.getHotNumbers(count);
 
-            return Array.from({ length: N }, (_, i) => ({
-                n: i + 1,
-                s: 0.5 * hot[i] + zoneWeight * blockHits[i]
-            }))
-                .sort((a, b) => b.s - a.s)
-                .slice(0, count)
-                .map(x => x.n);
+            // A block IS significant: take the numbers inside the strongest
+            // blocks and order them by gap. Blending 0.5 × hit count into the
+            // score (as before) let frequency outvote the zone and returned
+            // Hot's ticket anyway.
+            const cut = Math.max(...blockHits) * 0.9;
+            const pool = [];
+            for (let i = 0; i < N; i++) if (blockHits[i] >= cut) pool.push(i + 1);
+            const ranked = this._byOverdue(pool);
+            if (ranked.length >= count) return ranked.slice(0, count).sort((a, b) => a - b);
+            const fill = this.getHotNumbers(count * 2).filter(n => !ranked.includes(n));
+            return [...ranked, ...fill].slice(0, count).sort((a, b) => a - b);
         }
         selectHotzoneNumbers() {
             const numbers = this.getHotzoneNumbers();
@@ -5755,44 +5885,62 @@
         }
 
         // --- Strategy: Digit Bias (Last-Digit Chi-Square) ---
+        // Most-overdue-first ordering for a pool of numbers. Used by the frame
+        // strategies (digit families, board zones): the frame decides WHICH pool
+        // is interesting, this decides which numbers inside it to take. Scoring
+        // the pool by hit count instead is what collapsed them onto Hot.
+        _byOverdue(pool) {
+            const stats = this.data.kenoStats.perNumberStats || [];
+            const fallbackGap = this.numberCount / (this._drawnPerGame || 10);
+            return pool.map(n => {
+                const st = stats[n - 1];
+                const avg = st && st.avgInterval > 0 ? st.avgInterval : fallbackGap;
+                return { n, ratio: st ? (st.betsSince || 0) / avg : 0 };
+            }).sort((a, b) => b.ratio - a.ratio).map(x => x.n);
+        }
+
+        // Digit families (…1, …2, …) scored against their expected share, then
+        // picked inside the winning families by gap.
+        //
+        // It used to multiply each number's own hit count by a small family
+        // weight (±40% at most), so the raw count decided the order and the
+        // result was Hot's ticket. Now the family z-score decides which pool to
+        // draw from, and the pool is ordered by overdue — the frequency signal
+        // can no longer leak into the number-level choice.
         getDigitBiasNumbers(count = 9) {
-            if (this.data.kenoStats.totalBets < 30) return this.getHotNumbers(count);
+            const N = this.numberCount;
+            const ks = this.data.kenoStats;
+            const games = ks.analyzedGames || Math.min(ks.totalBets, 1000);
+            if (games < 30) return this.getHotNumbers(count);
+            const hot = ks.hotNumbers;
 
-            const hot = this.data.kenoStats.hotNumbers;
-            const totalBets = this.data.kenoStats.totalBets;
-
-            // digit 0 → {10,20,30,40}, digit 1 → {1,11,21,31}, etc.
-            const digitTotals = new Array(10).fill(0);
-            for (let i = 0; i < this.numberCount; i++) {
-                digitTotals[(i + 1) % 10] += hot[i];
+            // group by last digit; families differ in size (40-grid: 4 each)
+            const fam = Array.from({ length: 10 }, () => ({ members: [], hits: 0 }));
+            for (let i = 0; i < N; i++) {
+                const d = (i + 1) % 10;
+                fam[d].members.push(i + 1);
+                fam[d].hits += hot[i];
             }
+            const total = hot.reduce((a, b) => a + b, 0);
+            if (total <= 0) return this.getHotNumbers(count);
 
-            // Expected: 4 numbers/digit × (20/40 draw rate) × totalBets = 2 × totalBets
-            const expectedPerDigit = totalBets * 2;
+            const scored = fam.map((f, d) => {
+                const share = f.members.length / N;
+                const exp = total * share;
+                const sd = Math.sqrt(Math.max(total * share * (1 - share), 1e-9));
+                return { d, members: f.members, z: (exp > 0 ? (f.hits - exp) / sd : 0) };
+            }).sort((a, b) => b.z - a.z);
 
-            // Chi-square gate (df=9, p<0.05 = 16.919)
-            const chiSquare = digitTotals.reduce((sum, obs) =>
-                sum + Math.pow(obs - expectedPerDigit, 2) / expectedPerDigit, 0);
+            // only families genuinely running above their share are interesting
+            const strong = scored.filter(f => f.z >= 1);
+            const chosen = (strong.length ? strong : scored.slice(0, 2)).slice(0, 3);
+            this._lastDigitFamilies = chosen.map(f => `…${f.d}`).join(' ');
 
-            if (chiSquare < 16.919) {
-                return this.getHotNumbers(count);
-            }
-
-            // Signed z-score per digit
-            const digitBias = digitTotals.map((obs, d) => ({
-                d,
-                zscore: (obs - expectedPerDigit) / Math.max(Math.sqrt(expectedPerDigit), 1)
-            }));
-
-            return Array.from({ length: this.numberCount }, (_, i) => {
-                const digit = (i + 1) % 10;
-                const z = digitBias[digit].zscore;
-                const boost = 1 + Math.min(Math.max(z * 0.15, -0.4), 0.4);
-                return { n: i + 1, score: (hot[i] + 1) * boost };
-            })
-                .sort((a, b) => b.score - a.score)
-                .slice(0, count)
-                .map(x => x.n);
+            const pool = chosen.flatMap(f => f.members);
+            const ranked = this._byOverdue(pool);
+            if (ranked.length >= count) return ranked.slice(0, count).sort((a, b) => a - b);
+            const fill = this.getHotNumbers(count * 2).filter(n => !ranked.includes(n));
+            return [...ranked, ...fill].slice(0, count).sort((a, b) => a - b);
         }
         selectDigitBiasNumbers() {
             const numbers = this.getDigitBiasNumbers();
@@ -5933,9 +6081,30 @@
         }
 
         // --- Strategy: Wheeling (Correlation-Based Way Tickets) ---
+        // Pair counts over the recent draws, keyed "lo-hi". Built here rather than
+        // waiting on the service worker's correlation round-trip: Wheeling used to
+        // fall back to Hot whenever that message hadn't landed, which made it Hot
+        // most of the time and silently.
+        pairCounts(limit = 150) {
+            const N = this.numberCount;
+            const draws = this.getRecentDraws(limit);
+            const cache = this._pairCache;
+            if (cache && cache.n === draws.length && cache.limit === limit) return cache.map;
+            const map = Object.create(null);
+            for (const d of draws) {
+                const u = [...new Set(d)].filter(n => n >= 1 && n <= N).sort((a, b) => a - b);
+                for (let i = 0; i < u.length; i++)
+                    for (let j = i + 1; j < u.length; j++)
+                        map[`${u[i]}-${u[j]}`] = (map[`${u[i]}-${u[j]}`] || 0) + 1;
+            }
+            this._pairCache = { n: draws.length, limit, map, draws: draws.length };
+            return map;
+        }
+
         getWheelingNumbers(count = 9) {
-            if (!this.correlationData || this.data.kenoStats.totalBets < 20) return this.getHotNumbers(count);
-            const pairEntries = Object.entries(this.correlationData.correlations?.[2] || {})
+            if (this.data.kenoStats.totalBets < 20) return this.getHotNumbers(count);
+            const pairs = this.pairCounts(150);
+            const pairEntries = Object.entries(pairs)
                 .filter(([, c]) => c > 2).sort(([, a], [, b]) => b - a);
             if (pairEntries.length === 0) return this.getHotNumbers(count);
             const groupSize = Math.ceil(count / 3);
@@ -5956,7 +6125,7 @@
             return unique.slice(0, count);
         }
         _findMostCorrelatedNumber(group, alreadySelected) {
-            const correlations = this.correlationData?.correlations?.[2] || {};
+            const correlations = this.pairCounts(150);
             let bestNum = null, bestScore = 0;
             for (let candidate = 1; candidate <= this.numberCount; candidate++) {
                 if (alreadySelected.includes(candidate)) continue;
@@ -5974,25 +6143,31 @@
         }
 
         // --- Strategy: Time-Series Forecast (EMA on Intervals) ---
-        getTimeSeriesNumbers(count = 9) {
-            if (this.data.kenoStats.totalBets < 30) return this.getOverdueNumbers(count);
-            const alpha = 0.3;
-            const forecasts = this.data.kenoStats.perNumberStats.map((s, i) => {
-                if (s.count < 3) return { n: i + 1, forecast: s.betsSince / Math.max(s.avgInterval, 1) };
-                // Build intervals from lastOccurrences
-                const occ = [...s.lastOccurrences].sort((a, b) => a - b);
-                const intervals = [];
-                for (let j = 1; j < occ.length; j++) intervals.push(occ[j] - occ[j - 1]);
-                if (intervals.length < 2) return { n: i + 1, forecast: s.betsSince / Math.max(s.avgInterval, 1) };
-                let ema = intervals[0];
-                for (let j = 1; j < intervals.length; j++) ema = alpha * intervals[j] + (1 - alpha) * ema;
-                return { n: i + 1, forecast: ema - s.betsSince };
-            });
-            return forecasts.sort((a, b) => a.forecast - b.forecast).slice(0, count).map(f => f.n);
+        // Drought Rebound — numbers whose recent rate has fallen furthest below
+        // THEIR OWN long-run rate, not below the uniform expectation. That is what
+        // separates it from Cold (lowest all-time count) and from Variance (below
+        // the 0.25 expectation lately): a number can run well above average all
+        // session and still be in a personal drought right now.
+        getDroughtReboundNumbers(count = 9) {
+            const ks = this.data.kenoStats;
+            const N = this.numberCount;
+            const games = ks.analyzedGames || Math.min(ks.totalBets, 1000);
+            if (games < 40) return this.getColdNumbers(count);
+            const w = Math.max(20, Math.min(60, Math.round(games * 0.25)));
+            const draws = this.getRecentDraws(w);
+            if (draws.length < 20) return this.getColdNumbers(count);
+            const recent = new Array(N + 1).fill(0);
+            for (const d of draws) for (const n of d) if (n >= 1 && n <= N) recent[n]++;
+            return Array.from({ length: N }, (_, i) => {
+                const histRate = (ks.hotNumbers[i] || 0) / games;
+                if (histRate <= 0) return { n: i + 1, score: 0 };
+                const recentRate = recent[i + 1] / draws.length;
+                // how far below its own pace, as a share of that pace
+                return { n: i + 1, score: (histRate - recentRate) / histRate };
+            }).sort((a, b) => b.score - a.score).slice(0, count).map(x => x.n);
         }
-        selectTimeSeriesNumbers() {
-            const numbers = this.getTimeSeriesNumbers();
-            this.animateSequentialSelection(numbers);
+        selectDroughtReboundNumbers() {
+            this.animateSequentialSelection(this.getDroughtReboundNumbers());
         }
 
         // --- Strategy: Balanced Distribution (Zone Coverage) ---
@@ -6022,14 +6197,28 @@
         }
 
         // --- Strategy: Momentum (Recent Acceleration) ---
+        // Numbers hitting faster lately than their own session rate.
+        //
+        // This counted "recent hits" as `lastOccurrences.filter(g => g >= totalBets - w)`,
+        // but lastOccurrences holds the INTERVALS between a number's appearances,
+        // not game indices — processKenoData pushes `interval`. So the filter was
+        // counting intervals longer than the whole session minus w, which only
+        // rarely-drawn numbers ever have, and Momentum returned Cold's ticket.
+        // The scoring formula was right all along; it was reading the wrong array.
         getMomentumNumbers(count = 9) {
-            const totalBets = this.data.kenoStats.totalBets;
-            if (totalBets < 20) return this.getHotNumbers(count);
-            const w = Math.min(15, Math.floor(totalBets * 0.15));
-            return this.data.kenoStats.perNumberStats.map((s, i) => {
-                const recent = s.lastOccurrences.filter(g => g >= totalBets - w).length;
-                const recentRate = recent / w;
-                const histRate = s.count / totalBets;
+            const ks = this.data.kenoStats;
+            const games = ks.analyzedGames || Math.min(ks.totalBets, 1000);
+            if (games < 20) return this.getHotNumbers(count);
+            const N = this.numberCount;
+            const w = Math.max(10, Math.min(30, Math.round(games * 0.15)));
+            const draws = this.getRecentDraws(w);
+            if (draws.length < 10) return this.getHotNumbers(count);
+            const recent = new Array(N + 1).fill(0);
+            for (const d of draws) for (const n of d) if (n >= 1 && n <= N) recent[n]++;
+            return Array.from({ length: N }, (_, i) => {
+                const recentRate = recent[i + 1] / draws.length;
+                const histRate = (ks.hotNumbers[i] || 0) / games;
+                // rate now, plus double weight on the acceleration
                 return { n: i + 1, score: recentRate + (recentRate - histRate) * 2 };
             }).sort((a, b) => b.score - a.score).slice(0, count).map(x => x.n);
         }
@@ -6041,6 +6230,40 @@
         // =====================================================================
         // END RESTORED STRATEGIES
         // =====================================================================
+
+        // Run a strategy at the size the spot control asks for. The select*
+        // wrappers all fill a fixed nine; the get* functions have taken a count
+        // all along, so this calls those and keeps the wrapper only where it
+        // does something extra on click (Variance's high/low toggle).
+        runStrategy(strategyId, methodName) {
+            const spots = this.spotsFor(strategyId);
+            const getter = methodName && methodName.replace(/^select/, 'get');
+            if (strategyId !== 'variance' && getter && typeof this[getter] === 'function') {
+                const nums = safe(() => this[getter](spots));
+                if (Array.isArray(nums) && nums.length) {
+                    this.animateSequentialSelection([...nums].sort((a, b) => a - b));
+                    return;
+                }
+            }
+            if (methodName && typeof this[methodName] === 'function') this[methodName]();
+        }
+
+        // Names the strategies Adaptive is currently blending, on its own tile.
+        noteAdaptiveBlend(topStrategies) {
+            safe(() => {
+                const names = topStrategies
+                    .map(t => this.getStrategyName(t.id) || t.id)
+                    .filter(Boolean);
+                if (!names.length) return;
+                this._adaptiveBlend = names.join(' + ');
+                const label = `Adaptive — currently blending ${this._adaptiveBlend}`;
+                const item = this.overlay?.querySelector('.action-item[data-strategy-id="adaptive"]')
+                    || document.querySelector('#overlay-side-actions .action-item[data-strategy-id="adaptive"]');
+                if (item) item.title = label;
+                const btn = item?.querySelector('.action-btn-lg');
+                if (btn) btn.title = label;
+            });
+        }
 
         // --- Strategy: Adaptive (Session Meta-Strategy, replaces Kelly) ---
         // Blends AI-recommended strategies, weighted by session performance + legend hit data
@@ -6064,7 +6287,12 @@
                 digitbias: (c) => this.getDigitBiasNumbers(c),
                 parity: (c) => this.getParityNumbers(c),
                 antipattern: (c) => this.getAntiPatternNumbers(c),
-                regime: (c) => this.getRegimeNumbers(c)
+                regime: (c) => this.getRegimeNumbers(c),
+                sector: (c) => this.getSectorRotationNumbers(c),
+                repeat: (c) => this.getRepeatChaserNumbers(c),
+                drought: (c) => this.getDroughtReboundNumbers(c),
+                anticluster: (c) => this.getAntiClusterNumbers(c),
+                realised: (c) => this.getRealisedReturnNumbers(c)
             };
 
             // Diverse complement pairs — primary drives, secondary diversifies
@@ -6084,14 +6312,29 @@
                 smart: ['positional', 'ema'],
                 regime: ['hot', 'overdue'],
                 digitbias: ['hot', 'positional'],
-                parity: ['digitbias', 'hot']
+                parity: ['digitbias', 'hot'],
+                sector: ['overdue', 'hot'],
+                repeat: ['hot', 'streak'],
+                drought: ['overdue', 'cold'],
+                anticluster: ['coverage', 'cold'],
+                realised: ['hot', 'overdue']
             };
 
             // Build legend-based strategy bias: strategies with more big hits get a weight bonus
             const siteKey = `${this.storageOrigin}-keno-session`;
             const legendHits = this.data.legendStats?.[siteKey]?.hitsByStrategy || {};
-            const totalLegendHits = Object.values(legendHits).reduce((a, b) => a + b, 0) || 1;
-            const legendBonus = (id) => 1 + (legendHits[id] || 0) / totalLegendHits;
+            const perf = this.data.kenoStrategyPerformance?.[siteKey] || {};
+            // Big-hit counts alone measure how often you CLICKED a strategy, not
+            // how it performed — in a real export the top scorer was Random, with
+            // 47 of 389 hits, purely because it got played most. Divide by the
+            // games each strategy actually ran so the bonus reflects hit RATE,
+            // and fall back to no bonus where the play count is missing or thin.
+            const legendBonus = (id) => {
+                const hits = legendHits[id] || 0;
+                const games = perf[id]?.totalGames || 0;
+                if (!hits || games < 20) return 1;
+                return 1 + Math.min((hits / games) * 10, 1);
+            };
 
             const rec = this._lastAIRecommendation;
             let topStrategies = [];
@@ -6116,7 +6359,11 @@
                 }
             } else {
                 // No AI recommendation yet — use legend stats to pick best known performers
-                const ranked = Object.entries(legendHits).sort((a, b) => b[1] - a[1]);
+                // Same correction here: rank by hits per game played, not raw hits.
+                const ranked = Object.entries(legendHits)
+                    .map(([id, hits]) => [id, hits / Math.max(perf[id]?.totalGames || 0, 1)])
+                    .filter(([id]) => (perf[id]?.totalGames || 0) >= 20)
+                    .sort((a, b) => b[1] - a[1]);
                 const best = ranked[0]?.[0];
                 if (best && strategyMap[best]) {
                     const [sec1] = complements[best] || ['positional'];
@@ -6131,6 +6378,11 @@
                     ];
                 }
             }
+
+            // Adaptive is a blend of other strategies by design — so say which
+            // ones. Without this the tile looks like an independent signal while
+            // quietly returning whatever its primary returned.
+            this.noteAdaptiveBlend(topStrategies);
 
             const votes = new Float32Array(this.numberCount + 1);
             topStrategies.forEach(({ id, weight }) => {
@@ -6284,84 +6536,98 @@
         }
 
         // TAG: NEW-STRATEGY-GAP-EXTREMES
-        getGapExtremesNumbers(count = 9) {
-            if (this.data.kenoStats.totalBets < 25) return this.getOverdueNumbers(count);
-
-            const stats = this.data.kenoStats.perNumberStats;
-            const totalBets = this.data.kenoStats.totalBets;
-
-            const scored = stats.map((s, i) => {
-                if (s.count < 3 || s.avgInterval <= 0) return { n: i + 1, score: 0 };
-
-                const expectedGap = s.avgInterval;
-                const zScore = (s.betsSince - expectedGap) / Math.max(s.entropy || (expectedGap * 0.6), 1);
-
-                // Bonus for numbers that are both extreme and reasonably frequent
-                const reliability = Math.min(s.count / 15, 1.0);
-                return { n: i + 1, score: zScore * reliability };
-            });
-
-            let selected = scored
-                .filter(x => x.score > 0.3)
-                .sort((a, b) => b.score - a.score)
-                .slice(0, count)
-                .map(x => x.n);
-
-            if (selected.length < count) {
-                const fillers = this.getEMANumbers(count * 2).filter(n => !selected.includes(n));
-                selected.push(...fillers.slice(0, count - selected.length));
-            }
-
-            return selected.slice(0, count);
-        }
-
-        selectGapExtremesNumbers() {
-            const numbers = this.getGapExtremesNumbers();
-            this.animateSequentialSelection(numbers);
-        }
-
-        // TAG: NEW-STRATEGY-COHESION
-        getCohesionNumbers(count = 9) {
-            const siteKey = `${this.storageOrigin}-keno-session`;
-            const results = this.cachedKenoResults?.[siteKey] || [];
-            if (results.length < 30) return this.getHotNumbers(count);
-
-            const lookback = Math.min(results.length, 120);
-            const recent = results.slice(-lookback);
-
-            const hotNumbers = this.getHotNumbers(12); // Current leaders
-            const hotSet = new Set(hotNumbers);
-
-            const coScore = new Float32Array(this.numberCount);
-
-            for (const bet of recent) {
-                const drawn = bet?.state?.drawnNumbers || [];
-                const drawnSet = new Set(drawn);
-
-                for (const h of hotNumbers) {
-                    const hi = h - 1;
-                    if (drawnSet.has(h)) {
-                        for (const n of drawn) {
-                            if (n !== h) {
-                                coScore[n - 1] += 1.0;
-                            }
-                        }
-                    }
+        // Repeat Chaser — lag-1 autocorrelation. For each number: given it was
+        // drawn, how often was it drawn again in the very next game, against the
+        // 0.25 chance rate. Nothing else in the engine looks at draw ORDER; every
+        // other strategy treats the session as an unordered pile of counts.
+        getRepeatChaserNumbers(count = 9) {
+            const N = this.numberCount;
+            const draws = this.getRecentDraws(300);
+            if (draws.length < 30) return this.getHotNumbers(count);
+            const p = (this._drawnPerGame || 10) / N;
+            const seen = new Array(N + 1).fill(0);    // times it appeared with a next draw to check
+            const again = new Array(N + 1).fill(0);   // ...and appeared in that next draw too
+            // draws[0] is newest, so draws[i + 1] is the game BEFORE draws[i]
+            for (let i = 0; i < draws.length - 1; i++) {
+                const now = new Set(draws[i]);
+                for (const n of draws[i + 1]) {
+                    if (n < 1 || n > N) continue;
+                    seen[n]++;
+                    if (now.has(n)) again[n]++;
                 }
             }
-
-            const scored = Array.from({ length: this.numberCount }, (_, i) => ({
-                n: i + 1,
-                score: coScore[i] * (this.data.kenoStats.hotNumbers[i] + 1)
-            })).sort((a, b) => b.score - a.score);
-
-            return scored.slice(0, count).map(x => x.n);
+            return Array.from({ length: N }, (_, i) => {
+                const n = i + 1;
+                if (seen[n] < 4) return { n, score: -1 };
+                const rate = again[n] / seen[n];
+                // shrink toward chance so a 2-of-3 fluke can't outrank a real run
+                const shrunk = (again[n] + p * 8) / (seen[n] + 8);
+                return { n, score: (shrunk - p) * Math.min(seen[n] / 20, 1) + rate * 0.001 };
+            }).sort((a, b) => b.score - a.score).slice(0, count).map(x => x.n);
+        }
+        selectRepeatChaserNumbers() {
+            this.animateSequentialSelection(this.getRepeatChaserNumbers());
         }
 
-        selectCohesionNumbers() {
-            const numbers = this.getCohesionNumbers();
-            this.animateSequentialSelection(numbers);
+
+        // TAG: NEW-STRATEGY-COHESION
+        // Sector Rotation — which part of the board is running hot RIGHT NOW.
+        // Positional runs chi-square over the whole session, so it cannot see a
+        // bias that started sixty draws ago. This scores each row and column over
+        // a short window against its expected share, takes the two strongest
+        // sectors, and picks inside them by gap — so frequency decides the SECTOR
+        // and the gap decides the numbers, instead of hit count deciding both.
+        getSectorRotationNumbers(count = 9) {
+            const N = this.numberCount;
+            const cols = this.gridCols, rows = this.gridRows;
+            const games = this.data.kenoStats.analyzedGames || this.data.kenoStats.totalBets;
+            if (games < 30) return this.getPositionalNumbers(count);
+            const w = Math.max(30, Math.min(60, Math.round(games * 0.25)));
+            const draws = this.getRecentDraws(w);
+            if (draws.length < 20) return this.getPositionalNumbers(count);
+
+            const hits = new Array(N + 1).fill(0);
+            let total = 0;
+            for (const d of draws) for (const n of d) if (n >= 1 && n <= N) { hits[n]++; total++; }
+
+            // sectors = every row and every column, scored by z against its share
+            const sectors = [];
+            const push = (label, members) => {
+                const seen = members.reduce((t, n) => t + hits[n], 0);
+                const share = members.length / N;
+                const exp = total * share;
+                const sd = Math.sqrt(Math.max(total * share * (1 - share), 1e-9));
+                sectors.push({ label, members, z: (seen - exp) / sd });
+            };
+            for (let r = 0; r < rows; r++) {
+                const m = [];
+                for (let c = 0; c < cols; c++) { const n = r * cols + c + 1; if (n <= N) m.push(n); }
+                if (m.length) push(`row ${r + 1}`, m);
+            }
+            for (let c = 0; c < cols; c++) {
+                const m = [];
+                for (let r = 0; r < rows; r++) { const n = r * cols + c + 1; if (n <= N) m.push(n); }
+                if (m.length) push(`col ${c + 1}`, m);
+            }
+            sectors.sort((a, b) => b.z - a.z);
+            const pool = [...new Set([...sectors[0].members, ...(sectors[1]?.members || [])])];
+            this._lastSector = sectors.slice(0, 2).map(x => x.label).join(' + ');
+
+            // inside the hot sectors, take the most overdue numbers
+            const stats = this.data.kenoStats.perNumberStats || [];
+            const ranked = pool.map(n => {
+                const st = stats[n - 1];
+                const avg = st && st.avgInterval > 0 ? st.avgInterval : (N / (this._drawnPerGame || 10));
+                return { n, ratio: st ? (st.betsSince || 0) / avg : 0 };
+            }).sort((a, b) => b.ratio - a.ratio).map(x => x.n);
+            if (ranked.length >= count) return ranked.slice(0, count).sort((a, b) => a - b);
+            const fill = this.getHotNumbers(count * 2).filter(n => !ranked.includes(n));
+            return [...ranked, ...fill].slice(0, count).sort((a, b) => a - b);
         }
+        selectSectorRotationNumbers() {
+            this.animateSequentialSelection(this.getSectorRotationNumbers());
+        }
+
 
         // TAG: NEW-STRATEGY-EDGE
         getEdgeNumbers(count = 9) {
@@ -6371,7 +6637,7 @@
             }
 
             const votes = new Float32Array(this.numberCount + 1);
-            const strategies = ['ema', 'positional', 'hot', 'gapextremes', 'cohesion'];
+            const strategies = ['ema', 'positional', 'hot', 'repeat', 'sector'];
 
             strategies.forEach(strat => {
                 const weight = 2.0; // Can be enhanced with real performance tracking later
@@ -6381,8 +6647,8 @@
                         case 'ema': nums = this.getEMANumbers(12); break;
                         case 'positional': nums = this.getPositionalNumbers(12); break;
                         case 'hot': nums = this.getHotNumbers(12); break;
-                        case 'gapextremes': nums = this.getGapExtremesNumbers(12); break;
-                        case 'cohesion': nums = this.getCohesionNumbers(12); break;
+                        case 'repeat': nums = this.getRepeatChaserNumbers(12); break;
+                        case 'sector': nums = this.getSectorRotationNumbers(12); break;
                     }
                     nums.forEach(n => votes[n] += weight);
                 } catch (e) { }
@@ -6506,68 +6772,75 @@
         // --- Strategy: Cluster (co-occurrence) ---
         // Numbers that land together: seed from the hottest, grow by total
         // co-occurrence with the set so far, for a tightly-clustered pick.
-        getCombinatorialWaysNumbers(count = 9) {
+        // Anti-Cluster — the mirror of Wheeling. Greedily builds a set of numbers
+        // that have AVOIDED each other, so the ticket spreads across independent
+        // draws instead of stacking on one cluster: more chances at a small hit,
+        // fewer at everything landing at once.
+        getAntiClusterNumbers(count = 9) {
             const N = this.numberCount;
             const draws = this.getRecentDraws(150);
-            if (draws.length < 20) return this.getHotNumbers(count);
-            const pair = Object.create(null);
-            const pk = (a, b) => (a < b ? a + '-' + b : b + '-' + a);
-            draws.forEach(d => {
-                const u = [...new Set(d)].filter(n => n >= 1 && n <= N).sort((a, b) => a - b);
-                for (let i = 0; i < u.length; i++)
-                    for (let j = i + 1; j < u.length; j++)
-                        pair[u[i] + '-' + u[j]] = (pair[u[i] + '-' + u[j]] || 0) + 1;
-            });
-            const start = this.getHotNumbers(1)[0] || 1;
-            const picked = [start];
-            while (picked.length < count) {
-                let best = -1, bestScore = -1;
+            if (draws.length < 20) return this.getCoverageNumbers(count);
+            const pairs = this.pairCounts(150);
+            const together = (a, b) => pairs[a < b ? `${a}-${b}` : `${b}-${a}`] || 0;
+            // seed with the number that shares fewest draws with everything else
+            const totals = Array.from({ length: N }, (_, i) => {
+                let t = 0;
+                for (let j = 1; j <= N; j++) if (j !== i + 1) t += together(i + 1, j);
+                return { n: i + 1, t };
+            }).sort((a, b) => a.t - b.t);
+            const picked = [totals[0].n];
+            while (picked.length < count && picked.length < N) {
+                let best = null, bestScore = Infinity;
                 for (let n = 1; n <= N; n++) {
                     if (picked.includes(n)) continue;
-                    let s = 0;
-                    for (const p of picked) s += pair[pk(p, n)] || 0;
-                    if (s > bestScore) { bestScore = s; best = n; }
+                    let score = 0;
+                    for (const q of picked) score += together(n, q);
+                    if (score < bestScore) { bestScore = score; best = n; }
                 }
-                if (best < 0) break;
+                if (!best) break;
                 picked.push(best);
             }
-            if (picked.length < count) {
-                for (const n of this.getHotNumbers(count * 2)) {
-                    if (!picked.includes(n)) picked.push(n);
-                    if (picked.length >= count) break;
-                }
-            }
-            return picked.slice(0, count).sort((a, b) => a - b);
+            return picked.sort((a, b) => a - b);
         }
-        selectCombinatorialWaysNumbers() {
-            const numbers = this.getCombinatorialWaysNumbers();
-            this.animateSequentialSelection(numbers);
+        selectAntiClusterNumbers() {
+            this.animateSequentialSelection(this.getAntiClusterNumbers());
         }
 
         // --- Strategy: Pulse (recency × frequency, recent-window boosted) ---
-        getConditionalBonusNumbers(count = 9) {
-            if (this.data.kenoStats.totalBets < 30) return this.getHotNumbers(count);
+        // Realised Return — the only strategy that reads your BET history rather
+        // than the draw history. For every number, the money your paid bets that
+        // included it actually returned, per unit staked. Needs real bets: with
+        // nothing staked there is nothing to rank, so it stands aside.
+        getRealisedReturnNumbers(count = 9) {
             const N = this.numberCount;
-            const stats = this.data.kenoStats.perNumberStats;
-            const draws = this.getRecentDraws(20);
-            const recentWin = Math.max(1, draws.length);
-            const recent = new Array(N + 1).fill(0);
-            draws.forEach(d => d.forEach(n => { if (n >= 1 && n <= N) recent[n]++; }));
-            return stats
-                .map((s, i) => {
-                    const n = i + 1;
-                    const recency = 1 / (s.betsSince + 1);     // how recently it last hit
-                    const recentRate = recent[n] / recentWin;  // how often it's hit lately
-                    // frequent × recent, amplified by current-window activity
-                    return { n, s: s.count * recency * (1 + recentRate * 3) };
-                })
-                .sort((a, b) => b.s - a.s)
-                .slice(0, count)
-                .map(x => x.n);
+            const all = this._validBets || [];
+            const staked = new Array(N + 1).fill(0);
+            const profit = new Array(N + 1).fill(0);
+            let paidBets = 0;
+            for (const b of all) {
+                const stake = VantedgeMoney.betStake(b);
+                if (!stake) continue;
+                const sel = b?.state?.selectedNumbers;
+                if (!Array.isArray(sel) || !sel.length) continue;
+                paidBets++;
+                const pl = betProfit(b);
+                for (const n of new Set(sel)) {
+                    if (n < 1 || n > N) continue;
+                    staked[n] += stake;
+                    profit[n] += pl;
+                }
+            }
+            if (paidBets < 10) return this.getHotNumbers(count);
+            return Array.from({ length: N }, (_, i) => {
+                const n = i + 1;
+                // shrink toward break-even so one lucky bet on a rare number
+                // cannot top the table
+                const weight = staked[n] / (staked[n] + 20);
+                return { n, score: staked[n] > 0 ? (profit[n] / staked[n]) * weight : -1 };
+            }).sort((a, b) => b.score - a.score).slice(0, count).map(x => x.n).sort((a, b) => a - b);
         }
-        selectConditionalBonusNumbers() {
-            const numbers = this.getConditionalBonusNumbers();
-            this.animateSequentialSelection(numbers);
+        selectRealisedReturnNumbers() {
+            this.animateSequentialSelection(this.getRealisedReturnNumbers());
         }
 
         calculateHeatScore(count, betsSince, avgInterval, totalBets) {

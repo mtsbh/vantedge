@@ -25,6 +25,9 @@
         try { return localStorage.getItem('vantedge_debug') === '1'; } catch (e) { return false; }
     })();
     function log(...args) { if (DEBUG) console.log('[Vantedge]', ...args); }
+    // Always-on: capture silently stopping is the failure that costs a session's
+    // data, so it says so whether or not debug logging is enabled.
+    function warn(...args) { console.warn('[Vantedge]', ...args); }
 
     // ── Native-function cloaking ──────────────────────────────────────────────
     // Cloudflare bot-detection calls Function.prototype.toString.call(fetch) and
@@ -82,6 +85,16 @@
     // games-prod.winna.com — the frame src is
     // https://games-prod.winna.com/game/keno?...). Match any Winna host serving a
     // keno endpoint rather than maintaining a list that goes stale on every move.
+    // Rainbet's keno route has moved before (/v1/games/keno/play,
+    // /original-games/keno/play). Match any Rainbet URL that mentions keno so a
+    // renamed path can't silently switch capture off — the same reason the Winna
+    // matcher below exists.
+    function isRainbetKenoURL(url) {
+        if (typeof url !== 'string') return false;
+        const u = url.toLowerCase();
+        return u.includes('rainbet.com') && u.includes('keno');
+    }
+
     function isWinnaKenoURL(url) {
         if (typeof url !== 'string') return false;
         const u = url.toLowerCase();
@@ -105,6 +118,7 @@
 
             const shouldIntercept = gameAPIEndpoints.some(endpoint => this._url.includes(endpoint)) ||
                                    isWinnaKenoURL(this._url) ||
+                                   isRainbetKenoURL(this._url) ||
                                    (site.includes('betfury.com') && this._url.toLowerCase().includes('keno'));
 
             if (shouldIntercept) {
@@ -146,6 +160,7 @@
         // Only intercept game-specific endpoints or BetFury Keno
         const shouldIntercept = gameAPIEndpoints.some(endpoint => url.includes(endpoint)) ||
                                isWinnaKenoURL(url) ||
+                               isRainbetKenoURL(url) ||
                                (site.includes('betfury.com') && url.toLowerCase().includes('keno')) ||
                                (site.includes('betfury.com') && method === 'POST');
 
@@ -591,11 +606,27 @@
             const response = JSON.parse(responseText);
 
             // Only process game-specific responses, ignore balance updates and other noise
-            if (url.includes('/v1/games/keno/play') || url.includes('/original-games/keno/play')) {
-                if (!response.keno_result && !response.drawnNumbers && !response.success) return;
-                log('Rainbet Keno game detected:', response);
+            if (isRainbetKenoURL(url)) {
+                // Some routes wrap the result: { data: { keno_result … } }
+                const payload = (response && response.data && (response.data.keno_result || response.data.game_result))
+                    ? response.data
+                    : response;
+                const looksLikeKeno = payload && (payload.keno_result || payload.drawnNumbers ||
+                    payload.drawn_numbers || payload.game_result || payload.success);
+                if (!looksLikeKeno) {
+                    // Don't fail silently: a shape change here is exactly how
+                    // Rainbet capture stops without anything in the console.
+                    warn('Rainbet keno response not recognised — capture skipped. Keys:', Object.keys(response || {}).join(', '));
+                    return;
+                }
+                log('Rainbet Keno game detected:', payload);
 
-                const transformedData = transformRainbetKenoData(response, requestData);
+                const transformedData = transformRainbetKenoData(payload, requestData);
+                if (!transformedData.state.drawnNumbers.length) {
+                    warn('Rainbet keno payload had no drawn numbers — capture skipped. Keys:',
+                        Object.keys(payload).join(', '));
+                    return;
+                }
 
                 window.postMessage({
                     type: 'KENO_BET_DATA',
