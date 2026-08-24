@@ -55,7 +55,7 @@
         predict: 'smart',
         // removed with no successor — counted, but not credited to anyone
         ensemble: null, mix: null, kelly: null, spectral: null, manual: null,
-        delta: null, regression: null
+        delta: null, regression: null, parity: null
     };
     function canonicalStrategyId(id) {
         if (!id) return null;
@@ -204,7 +204,16 @@
             this._storageListeners = [];
             // Bump when the curated main/drawer strategy set changes so a stale saved
             // strategyOrder/sideDrawerStrategies is reset to the new defaults once.
-            this.LAYOUT_VERSION = 4;
+            //
+            // 5: Core and Alternative membership and order both changed (Coverage
+            // promoted in, Delta, Regression and Parity removed, both grids
+            // re-sorted). Bumping was missed at the time and the effect was silent:
+            // the saved order is honoured verbatim whenever its LENGTH still
+            // matches, so an existing install kept rendering the old sixteen ids.
+            // Parity stayed in Core, Coverage never appeared in either grid, and
+            // Alternative showed 15 because Parity was occupying a Core slot and so
+            // got filtered out of the drawer set as well.
+            this.LAYOUT_VERSION = 5;
 
             const browserAPI = (typeof browser !== 'undefined' && browser?.storage) ? browser :
                 (typeof chrome !== 'undefined' && chrome?.storage) ? chrome : null;
@@ -283,7 +292,6 @@
                 // Row 5: Precision Methods
                 ema: { name: "EMA", method: "Exponential Moving Average", description: "Recency-weighted frequency. Alpha adapts between 0.15 and 0.30 with how volatile the recent draws are — steadier board, longer memory. Recent games count several times more than old ones, so it turns faster than Hot when a session shifts.", usage: "Best for: Live sessions where trends evolve fast." },
                 digitbias: { name: "Digit", method: "Family Z-Score → Gap", description: "Groups numbers by last digit, scores each family against its expected share of the draws, then picks the most overdue numbers inside the families that clear significance. The family decides the pool; the gap decides the numbers.", usage: "Best for: A board where whole digit families run above their share." },
-                parity: { name: "Parity", method: "Even/Odd Binomial Z-Test", description: "Binomial z-test on the even/odd split of everything drawn so far. Only when the imbalance clears p<0.05 does it tilt the ticket 70/30 toward the favored class, ranked inside each class by hit count; below significance it hands back to Hot rather than backing a coin flip. Needs ~5 games.", usage: "Best for: Sessions with a persistent, measurable even/odd imbalance." },
 
                 // Row 7: Meta Strategies
                 adaptive: { name: "Adaptive", method: "Session Meta-Strategy", description: "Queries AI performance scores and blends the top 2 recommended strategies weighted by their recent win rates. Dynamically updates as session patterns shift.", usage: "Best for: Any session length. The strategy that picks your strategy." },
@@ -2424,7 +2432,6 @@
                 volatility: '<path d="M2 12c2 0 2-5 4-5s2 5 4 5 2-5 4-5 2 5 4 5 2-5 4-5"/>',
                 ema: '<path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/>',
                 digitbias: '<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>',
-                parity: '<path d="M12 3v18"/><path d="M5 7h14"/><path d="M5 7 2 13a3 3 0 0 0 6 0z"/><path d="M19 7l-3 6a3 3 0 0 0 6 0z"/><path d="M8 21h8"/>',
                 adaptive: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
                 regime: '<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>',
                 sector: '<path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/>',
@@ -2467,9 +2474,10 @@
             // that was sitting behind a toggle: Coverage (z +7.5), Repeat (+5.6),
             // Portfolio (+4.7), Wheeling (+4.3).
             //
-            // Demoted: Parity is autonomous 0% of the time on a fair board — the
-            // tile is Hot — and Overdue only 24%. Smart (z +0.5) and Entropy
-            // (+1.3) are their own work but showed no signal against a real bias.
+            // Demoted: Overdue is autonomous only 24% of the time. Smart (z +0.5)
+            // and Entropy (+1.3) are their own work but showed no signal against a
+            // real bias. Parity was demoted for being autonomous 0% of the time and
+            // has since been removed outright — it returned Hot's exact set.
             //
             // Cold and Variance stay despite negative z. They are contrarian by
             // construction, so underperforming against a planted bias is them
@@ -2817,7 +2825,6 @@
             { id: 'drought', name: 'Drought' },
             { id: 'realised', name: 'Realised' },
             { id: 'hotzone', name: 'Hotzone' },
-            { id: 'parity', name: 'Parity' },
             // Contrarian / no measured signal
             { id: 'anticluster', name: 'Anti-Cluster' },
             { id: 'balanced', name: 'Balanced' },
@@ -2946,7 +2953,6 @@
                 'volatility': 'selectVolatilityNumbers',
                 'ema': 'selectEMANumbers',
                 'digitbias': 'selectDigitBiasNumbers',
-                'parity': 'selectParityNumbers',
                 'adaptive': 'selectAdaptiveNumbers',
                 'regime': 'selectRegimeNumbers',
                 'sector': 'selectSectorRotationNumbers',
@@ -6184,52 +6190,6 @@
             this.animateSequentialSelection(numbers);
         }
 
-        // --- Strategy: Parity Bias ---
-        getParityNumbers(count = 9) {
-            const hot = this.data.kenoStats.hotNumbers;
-            const total = hot.reduce((s, v) => s + v, 0);
-            const perGame = this._drawnPerGame || 10;
-            if (total < perGame * 5) return this.getHotNumbers(count);   // needs ~5 games
-
-            // Which parity (even / odd) has been drawn more?
-            let evenTotal = 0, oddTotal = 0;
-            for (let i = 0; i < this.numberCount; i++) {
-                if ((i + 1) % 2 === 0) evenTotal += hot[i];
-                else oddTotal += hot[i];
-            }
-
-            // The board splits exactly in half either way (20/20 on 40, 28/28 on
-            // 56), so a drawn number is even with p = 0.5. Without a significance
-            // gate this always declared a winner — on a fair board that is a coin
-            // flip, so the strategy was "Hot, restricted to a parity picked at
-            // random". Only claim a bias the count actually supports.
-            const z = (evenTotal - total * 0.5) / (Math.sqrt(total * 0.25) || 1);
-            if (Math.abs(z) < 1.96) return this.getHotNumbers(count);     // p >= 0.05
-            const favorEven = z > 0;
-
-            // Split numbers into favored and other parity, ranked by hot count within each group
-            const favored = [], other = [];
-            for (let i = 0; i < this.numberCount; i++) {
-                const n = i + 1;
-                ((n % 2 === 0) === favorEven ? favored : other).push({ n, score: hot[i] });
-            }
-            favored.sort((a, b) => b.score - a.score);
-            other.sort((a, b) => b.score - a.score);
-
-            // 70 % from the favored parity group, 30 % filler from the other
-            const nFavored = Math.ceil(count * 0.70);
-            const nOther   = count - nFavored;
-
-            return [
-                ...favored.slice(0, nFavored),
-                ...other.slice(0, nOther)
-            ].map(x => x.n);
-        }
-        selectParityNumbers() {
-            const numbers = this.getParityNumbers();
-            this.animateSequentialSelection(numbers);
-        }
-
         // --- Strategy: Poisson CDF helper ---
         poissonCDF(k, lambda) {
             let s = 0,
@@ -6565,8 +6525,8 @@
                 // about 4 of 10 numbers on a fair board and pads the rest, and
                 // the ticket looked entirely like Overdue's own work. Equality
                 // also misses a prefix, and misses a FULL hand-off that differs
-                // only in order — Hotzone, Digit and Parity sort their result
-                // while Hot returns heat order.
+                // only in order — Hotzone and Digit sort their result while Hot
+                // returns heat order.
                 //
                 // So measure how much of the result the filler actually supplied,
                 // and treat a clear majority as a hand-off.
@@ -6596,8 +6556,8 @@
                 if (bets > 80) {                       // past every data threshold
                     // Clear the thin-session marks once on the way past the cap,
                     // then leave the map alone. Not every hand-off is about thin
-                    // data: Parity hands back to Hot whenever the even/odd split
-                    // isn't significant, and Edge falls back to its fixed slate
+                    // data: Hotzone hands back to Hot whenever no block clears its
+                    // significance test, and Edge falls back to its fixed slate
                     // until something shows an edge — either can happen at 300
                     // games. Those are found by clicking (runStrategy calls
                     // noteStrategyHandoff), and wiping the map on every bet
@@ -6719,7 +6679,6 @@
                 ema: (c) => this.getEMANumbers(c),
                 volatility: (c) => this.getVolatilityNumbers(c),
                 digitbias: (c) => this.getDigitBiasNumbers(c),
-                parity: (c) => this.getParityNumbers(c),
                 antipattern: (c) => this.getAntiPatternNumbers(c),
                 regime: (c) => this.getRegimeNumbers(c),
                 sector: (c) => this.getSectorRotationNumbers(c),
@@ -6746,7 +6705,6 @@
                 smart: ['positional', 'ema'],
                 regime: ['hot', 'overdue'],
                 digitbias: ['hot', 'positional'],
-                parity: ['digitbias', 'hot'],
                 sector: ['overdue', 'hot'],
                 repeat: ['hot', 'streak'],
                 drought: ['overdue', 'cold'],
