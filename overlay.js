@@ -1577,9 +1577,7 @@
                     </div>
                 </div>
                 <div class="vx-sp-nums-row">
-                    <div class="vx-sp-nums-list" id="overlay-current-combo-nums" title="Click to apply these numbers to the board">
-                        ${numsDisplay}
-                    </div>
+                    <div class="vx-sp-nums-list" id="overlay-current-combo-nums">${numsDisplay}</div>
                 </div>
                 <div class="vx-sp-stats-grid">
                     <div class="vx-sp-col"><span class="vx-sp-k">BEST</span><span class="vx-sp-v ${stats && stats.best > 0 ? 'pos' : ''}">${stats && stats.best > 0 ? stats.best.toFixed(1) + 'x' : '--'}</span></div>
@@ -1604,10 +1602,9 @@
                 this.applyCombo(newPick);
                 this.renderSmartPicker();
             };
-            const numsEl = el.querySelector('#overlay-current-combo-nums');
-            if (numsEl) numsEl.onclick = () => {
-                if (activeNums.length) this.applyCombo(activeNums);
-            };
+            // No click handler on the numbers: choosing a tab or a size already
+            // applies them to the board, so a second way to do the same thing
+            // just made a read-out look like a button.
         }
 
         getSiteBadgeText() {
@@ -4147,9 +4144,10 @@
                 border: 1px solid rgba(255, 255, 255, 0.08);
                 color: #8b949e;
                 border-radius: 6px;
-                padding: 6px 4px;
-                font-size: 11px;
+                padding: 4px 4px;
+                font-size: 10px;
                 font-weight: 600;
+                line-height: 1.15;
                 cursor: pointer;
                 transition: all 0.12s ease;
             }
@@ -4163,38 +4161,34 @@
                 color: #3fb950;
             }
             .vx-sp-icon {
-                font-size: 12px;
+                font-size: 10px;
+                line-height: 1.15;
             }
             .vx-sp-select-wrap {
                 flex: 0 0 auto;
             }
             .vx-sp-select-wrap .vx-spsize {
-                padding: 6px 8px;
+                height: 21.5px;
+                padding: 0 4px;
+                line-height: 1.15;
                 background: #10161f;
                 border: 1px solid rgba(255, 255, 255, 0.08);
                 color: #e6edf3;
                 border-radius: 6px;
-                font-size: 11px;
+                font-size: 10px;
                 font-weight: 600;
                 cursor: pointer;
             }
             .vx-sp-nums-row {
-                margin-bottom: 8px;
+                margin-bottom: 6px;
             }
             .vx-sp-nums-list {
-                background: #10161f;
-                border: 1px solid rgba(255, 255, 255, 0.06);
-                border-radius: 6px;
-                padding: 7px 10px;
+                padding: 3px 4px;
+                text-align: center;
                 font-size: 12px;
                 font-weight: 600;
                 color: #e6edf3;
-                letter-spacing: 0.5px;
-                cursor: pointer;
-                transition: border-color 0.12s ease;
-            }
-            .vx-sp-nums-list:hover {
-                border-color: rgba(63, 185, 80, 0.4);
+                letter-spacing: 0.6px;
             }
             .vx-sp-stats-grid {
                 display: grid;
