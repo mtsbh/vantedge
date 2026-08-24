@@ -117,6 +117,74 @@
         // everything else measured flat enough that 6 is as good as anything
     };
 
+    // Stake keno pay tables, 1-40 board with 10 drawn. multiplier[risk][picks][hits].
+    // Sourced independently and cross-checked two ways: every row's hypergeometric
+    // expected value lands within 98.65-99.07% (Stake Originals run a 1% house
+    // edge, not the 3% often quoted), and every full-hit cell matches a table the
+    // owner supplied separately. Only valid for the 40-number board — Rainbet's
+    // 56-number Extreme mode pays differently and the panel hides there.
+    const KENO_PAYOUTS = {
+        classic: {
+            1: [0, 3.96], 2: [0, 1.9, 4.5], 3: [0, 1, 3.1, 10.4],
+            4: [0, 0.8, 1.8, 5, 22.5], 5: [0, 0.25, 1.4, 4.1, 16.5, 36],
+            6: [0, 0, 1, 3.68, 7, 16.5, 40], 7: [0, 0, 0.47, 3, 4.5, 14, 31, 60],
+            8: [0, 0, 0, 2.2, 4, 13, 22, 55, 70],
+            9: [0, 0, 0, 1.55, 3, 8, 15, 44, 60, 85],
+            10: [0, 0, 0, 1.4, 2.25, 4.5, 8, 17, 50, 80, 100]
+        },
+        low: {
+            1: [0.7, 1.85], 2: [0, 2, 3.8], 3: [0, 1.1, 1.38, 26],
+            4: [0, 0, 2.2, 7.9, 90], 5: [0, 0, 1.5, 4.2, 13, 300],
+            6: [0, 0, 1.1, 2, 6.2, 100, 700], 7: [0, 0, 1.1, 1.6, 3.5, 15, 225, 700],
+            8: [0, 0, 1.1, 1.5, 2, 5.5, 39, 100, 800],
+            9: [0, 0, 1.1, 1.3, 1.7, 2.5, 7.5, 50, 250, 1000],
+            10: [0, 0, 1.1, 1.2, 1.3, 1.8, 3.5, 13, 50, 250, 1000]
+        },
+        medium: {
+            1: [0.4, 2.75], 2: [0, 1.8, 5.1], 3: [0, 0, 2.8, 50],
+            4: [0, 0, 1.7, 10, 100], 5: [0, 0, 1.4, 4, 14, 390],
+            6: [0, 0, 0, 3, 9, 180, 710], 7: [0, 0, 0, 2, 7, 30, 400, 800],
+            8: [0, 0, 0, 2, 4, 11, 67, 400, 900],
+            9: [0, 0, 0, 2, 2.5, 5, 15, 100, 500, 1000],
+            10: [0, 0, 0, 1.6, 2, 4, 7, 26, 100, 500, 1000]
+        },
+        high: {
+            1: [0, 3.96], 2: [0, 0, 17.1], 3: [0, 0, 0, 81.5],
+            4: [0, 0, 0, 10, 259], 5: [0, 0, 0, 4.5, 48, 450],
+            6: [0, 0, 0, 0, 11, 350, 710], 7: [0, 0, 0, 0, 7, 90, 400, 800],
+            8: [0, 0, 0, 0, 5, 20, 270, 600, 900],
+            9: [0, 0, 0, 0, 4, 11, 56, 500, 800, 1000],
+            10: [0, 0, 0, 0, 3.5, 8, 13, 63, 500, 800, 1000]
+        }
+    };
+    const RISK_ORDER = ['classic', 'low', 'medium', 'high'];
+
+    // Exact hypergeometric: P(h of your k picks are among the 10 drawn from 40).
+    function hyperP(k, h) {
+        const C = (n, r) => {
+            if (r < 0 || r > n) return 0;
+            let v = 1;
+            for (let i = 0; i < r; i++) v = v * (n - i) / (i + 1);
+            return v;
+        };
+        return C(10, h) * C(30, k - h) / C(40, k);
+    }
+
+    // Expected return and standard deviation per unit staked for one pay row.
+    // The sd is the point of the whole panel: across risk levels the EV barely
+    // moves (every row is built to the same ~99% RTP) while the spread does not.
+    function ladderStats(risk, picks) {
+        const pay = KENO_PAYOUTS[risk]?.[picks];
+        if (!pay) return null;
+        let ev = 0, e2 = 0;
+        for (let h = 0; h < pay.length; h++) {
+            const p = hyperP(picks, h);
+            ev += p * pay[h];
+            e2 += p * pay[h] * pay[h];
+        }
+        return { ev, sd: Math.sqrt(Math.max(0, e2 - ev * ev)), pay };
+    }
+
     const HEAT = {
         top: [47, 56, 69], bot: [36, 44, 56], border: [72, 80, 94],
         hotFill: [112, 74, 38], hotEdge: [206, 138, 60],
@@ -673,10 +741,12 @@
             // sessions don't lag the page.
             this.populateHeatmap();
             this.updateStatusBar();
+            safe(() => this.checkGapAlerts());
             const now = Date.now();
             if (!this.lastUiUpdateTime || (now - this.lastUiUpdateTime) >= 2000) {
                 this.renderInsights();
                 this.updateAIRecommendation();
+                safe(() => this.renderKenoPayouts());
                 this.lastUiUpdateTime = now;
             }
         }
@@ -1043,6 +1113,7 @@
 
         applyCombo(numbers) {
             this.currentSelectedCombo = [...numbers].sort((a, b) => a - b);
+            safe(() => this.renderKenoPayouts());
             this.animateSequentialSelection(this.currentSelectedCombo);
             this.renderSmartPicker();
         }
@@ -2354,6 +2425,136 @@
             return head + `<div class="vx-mpaygrid">${rows}</div>`;
         }
 
+        // Draws since a specific combo last landed in full, and how many times it
+        // has. Cheaper than computeHotGroups for a handful of saved combos, and
+        // works for any size rather than one k at a time.
+        comboGap(numbers, limit = 600) {
+            const want = [...new Set(numbers)];
+            const draws = this.getRecentDraws(limit);
+            let gap = null, count = 0;
+            for (let i = 0; i < draws.length; i++) {
+                const d = new Set(draws[i]);
+                if (want.every(n => d.has(n))) {
+                    if (gap === null) gap = i;    // index 0 is the most recent draw
+                    count++;
+                }
+            }
+            return { gap, count, draws: draws.length };
+        }
+
+        // Tell you when a SAVED combo crosses into due or overdue territory.
+        //
+        // Favourites only, on purpose. The hot-groups table churns constantly, so
+        // alerting on all of it would be noise; a starred combo is one you chose
+        // to watch. Fires once per state per combo and re-arms when it hits.
+        //
+        // The wording stays neutral. A combo at 94% of its expected gap has the
+        // same chance next round as one that just landed — the draw has no memory
+        // — so this reports where the gap is, and does not suggest acting on it.
+        checkGapAlerts() {
+            safe(() => {
+                if (this.numberCount !== 40) return;
+                // Favourites plus anything you have actually played more than a
+                // couple of times. Starring is friction and a combo you have been
+                // betting is one you care about whether or not you remembered to
+                // star it.
+                //
+                // It stops there for a reason. Being overdue is not rare — gaps
+                // are geometric, so P(gap >= 1.5x expected) = e^-1.5, about 22%.
+                // Measured on 600 draws: of 9,819 tracked 3-picks, 2,137 were
+                // overdue at the same moment. Alerting on every tracked combo
+                // means a couple of thousand notifications, which is why the set
+                // is the ones with your money in them rather than all of them.
+                // Hot Groups -> Overdue is the view for browsing the rest.
+                const favs = Array.isArray(this.comboFavorites) ? this.comboFavorites : [];
+                const hist = safe(() => this.computeComboHistory()) || {};
+                const played = Object.keys(hist).filter(k => (hist[k]?.plays || 0) >= 3);
+                const watch = [...new Set([...favs, ...played])].slice(0, 40);
+                if (!watch.length) return;
+                this._gapAlertState = this._gapAlertState || {};
+                for (const key of watch) {
+                    const nums = key.split('-').map(Number).filter(n => n >= 1 && n <= this.numberCount);
+                    if (nums.length < 2 || nums.length > 10) continue;
+                    const exp = this.expectedGroupGap(nums.length);
+                    if (!isFinite(exp) || exp <= 0) continue;
+                    const { gap } = this.comboGap(nums);
+                    if (gap === null) continue;
+                    const ratio = gap / exp;
+                    const state = gap === 0 ? 'now' : ratio >= 1.5 ? 'overdue' : ratio >= 0.8 ? 'due' : '';
+                    const prev = this._gapAlertState[key];
+                    if (state === prev) continue;
+                    this._gapAlertState[key] = state;
+                    const tag = favs.includes(key) ? 'saved' : 'played';
+                    if (state === 'due' && prev !== 'overdue') {
+                        this.showToast(`${key} (${tag}) is at ${Math.round(ratio * 100)}% of its expected gap — ${gap} of ~${Math.round(exp)} draws.`, 'due');
+                    } else if (state === 'overdue') {
+                        this.showToast(`${key} (${tag}) is past 1.5x its expected gap — ${gap} draws against ~${Math.round(exp)}.`, 'overdue');
+                    }
+                }
+            });
+        }
+
+        // What the current ticket pays at each risk level.
+        //
+        // This is deliberately NOT a timing signal. Switching risk changes the
+        // shape of the payout, never the odds: every row is built to the same
+        // ~99% RTP, so the EV column barely moves while the spread column moves
+        // a lot. On a 4-pick, High drops the 1.7x that lands 21% of the time and
+        // pays 259x instead of 100x for the full hit — same expected return,
+        // roughly 2.4x the standard deviation. That is the whole trade.
+        renderKenoPayouts() {
+            const el = this.overlay?.querySelector('#overlay-keno-payouts');
+            if (!el) return;
+            // 56-number Extreme runs a different table; don't show a wrong one.
+            if (this.numberCount !== 40) { el.innerHTML = ''; return; }
+            const picks = (this.currentSelectedCombo?.length)
+                || this.data.selectedNumbers?.size || 0;
+            if (!picks || picks < 1 || picks > 10) {
+                el.innerHTML = `<div class="vx-combos-head"><span class="vx-section-title">Payouts</span></div>
+                    <div class="vx-combos-empty">Pick 1-10 numbers to see what they pay.</div>`;
+                return;
+            }
+            const open = !!this.kenoPayoutsOpen;
+            const pFull = hyperP(picks, picks);
+            const oneIn = pFull > 0 ? Math.round(1 / pFull) : Infinity;
+            const head = `<div class="vx-mpayhead" id="overlay-keno-payhead"
+                    title="Exact hypergeometric: all ${picks} of your picks inside the 10 drawn from 40.">
+                    <span class="vx-section-title">Payouts</span>
+                    <span class="vx-chcount">${picks} picks</span>
+                    <span class="vx-mpaymax">all ${picks} · 1 in ${oneIn.toLocaleString()}</span>
+                    <span class="vx-mcar">${open ? '▲' : '▼'}</span>
+                </div>`;
+            if (!open) { el.innerHTML = head; this._wireKenoPayouts(); return; }
+
+            // Only show hit counts some risk level actually pays for.
+            const cols = [];
+            for (let h = 0; h <= picks; h++) {
+                if (RISK_ORDER.some(r => (KENO_PAYOUTS[r][picks] || [])[h] > 0)) cols.push(h);
+            }
+            const fmt = (v) => !v ? '<span class="vx-kpz">—</span>'
+                : (v >= 100 ? Math.round(v) : v.toFixed(v < 10 ? 2 : 1)) + 'x';
+            const header = `<div class="vx-kprow vx-kphead"><span class="vx-kpname"></span>`
+                + cols.map(h => `<span class="vx-kpcell">${h}</span>`).join('')
+                + `<span class="vx-kpcell vx-kpev">RTP</span><span class="vx-kpcell vx-kpev">SPREAD</span></div>`;
+            const rows = RISK_ORDER.map(r => {
+                const st = ladderStats(r, picks);
+                if (!st) return '';
+                return `<div class="vx-kprow"><span class="vx-kpname">${r}</span>`
+                    + cols.map(h => `<span class="vx-kpcell ${h === picks ? 'full' : ''}">${fmt(st.pay[h])}</span>`).join('')
+                    + `<span class="vx-kpcell vx-kpev">${(st.ev * 100).toFixed(1)}%</span>`
+                    + `<span class="vx-kpcell vx-kpev">${st.sd.toFixed(1)}</span></div>`;
+            }).join('');
+            el.innerHTML = head
+                + `<div class="vx-kpwrap"><div class="vx-kptable">${header}${rows}</div></div>`
+                + `<div class="vx-kpnote">Columns are hits. RTP is near-identical across rows — risk changes the spread, not the edge, and never the odds of hitting.</div>`;
+            this._wireKenoPayouts();
+        }
+
+        _wireKenoPayouts() {
+            const h = this.overlay?.querySelector('#overlay-keno-payhead');
+            if (h) h.onclick = () => { this.kenoPayoutsOpen = !this.kenoPayoutsOpen; this.renderKenoPayouts(); };
+        }
+
         // One status-strip tile, shared by the keno and mines strips.
         // Same markup and classes as the keno strip. It used to emit .vx-stat-k
         // / .vx-stat-v, whose CSS went away with the strip redesign — leaving the
@@ -2384,6 +2585,7 @@
                             </div>
                     </div>
                 </div>
+                <div class="vx-combos" id="overlay-keno-payouts"></div>
                 <div class="vx-combos" id="overlay-smart-picker"></div>
                 <div class="vx-combos" id="overlay-hot-combos"></div>
                 <div class="vx-combos" id="overlay-combo-history"></div>`;
@@ -3229,22 +3431,13 @@
             this.showToast(`Moved ${strategyId} to Advanced`);
         }
 
-        showToast(message) {
+        showToast(message, kind = '') {
             const toast = document.createElement('div');
+            toast.className = `vx-toast ${kind}`;
             toast.textContent = message;
-            toast.style.cssText = `
-                position: fixed;
-                top: 20px;
-                right: 20px;
-                background: #333;
-                color: #fff;
-                padding: 10px 15px;
-                border-radius: 5px;
-                z-index: 10000;
-                font-family: Arial, sans-serif;
-            `;
             document.body.appendChild(toast);
-            setTimeout(() => toast.remove(), 3000);
+            setTimeout(() => toast.classList.add('out'), 5200);
+            setTimeout(() => toast.remove(), 5600);
         }
 
         async saveOverlayPosition() {
@@ -3903,6 +4096,50 @@
            }
            .vx-st-btn:hover { color: #e6edf3; border-color: rgba(255, 255, 255, 0.18); }
            .vx-st-btn.on { background: rgba(63, 185, 80, 0.16); border-color: rgba(63, 185, 80, 0.5); color: #3fb950; }
+
+           /* ---- Keno payout ladder ---- */
+           .vx-kpwrap { overflow-x: auto; }
+           .vx-kptable { min-width: 100%; font-variant-numeric: tabular-nums; }
+           .vx-kprow {
+               display: flex; align-items: center; gap: 2px;
+               padding: 2px 0;
+               border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+           }
+           .vx-kprow:last-child { border-bottom: 0; }
+           .vx-kphead { color: #6e7681; font-size: 8px; text-transform: uppercase; letter-spacing: 0.4px; }
+           .vx-kpname {
+               flex: 0 0 52px; font-size: 9px; font-weight: 600;
+               color: #8b949e; text-transform: capitalize;
+           }
+           .vx-kpcell {
+               flex: 1 1 0; min-width: 30px; text-align: center;
+               font-size: 9px; color: #c9d1d9;
+           }
+           .vx-kpcell.full { color: #3fb950; font-weight: 700; }
+           .vx-kpz { color: #4a5260; }
+           .vx-kpev { flex: 0 0 38px; color: #8b949e; }
+           .vx-kpnote {
+               margin-top: 5px; font-size: 8px; line-height: 1.35;
+               color: #6e7681;
+           }
+
+           /* ---- Toast ---- */
+           .vx-toast {
+               position: fixed; top: 18px; right: 18px; z-index: 2147483000;
+               max-width: 320px;
+               background: #161c26;
+               border: 1px solid rgba(255, 255, 255, 0.10);
+               border-left: 3px solid #6e7681;
+               border-radius: 8px;
+               padding: 9px 12px;
+               font-family: 'Ubuntu', system-ui, sans-serif;
+               font-size: 11px; line-height: 1.4; color: #e6edf3;
+               box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+               opacity: 1; transition: opacity 0.35s ease, transform 0.35s ease;
+           }
+           .vx-toast.due { border-left-color: #d29922; }
+           .vx-toast.overdue { border-left-color: #e5534b; }
+           .vx-toast.out { opacity: 0; transform: translateY(-6px); }
 
             /* ---- Status strip ---- */
             .vx-status-strip {
