@@ -54,7 +54,8 @@
         temporal: 'ema',
         predict: 'smart',
         // removed with no successor — counted, but not credited to anyone
-        ensemble: null, mix: null, kelly: null, spectral: null, manual: null
+        ensemble: null, mix: null, kelly: null, spectral: null, manual: null,
+        delta: null, regression: null
     };
     function canonicalStrategyId(id) {
         if (!id) return null;
@@ -81,8 +82,8 @@
     //   - falling (Progressive 0.320 at rank 2 -> 0.268 by rank 10, Wheeling,
     //     Bayesian, Portfolio) — it is sure about a few numbers and padding after
     //     that, so play few spots.
-    //   - rising (Overdue 0.251 -> 0.277, Regression 0.221 -> 0.301) — its top
-    //     pick is its worst and it only works in aggregate, so play many.
+    //   - rising (Overdue 0.251 -> 0.277) — its top pick is its worst and it
+    //     only works in aggregate, so play many.
     //   - flat (Hot, Coverage, Adaptive, EMA) — the signal is spread evenly and
     //     the count barely matters; sit mid-table.
     // Several of the old hand-picked values were backwards: Overdue was 4 and
@@ -102,10 +103,9 @@
     const STRATEGY_SPOTS = {
         // top-heavy: the rate collapses after the first few picks
         wheeling: 3, bayesian: 3, volatility: 3, portfolio: 3,
-        delta: 1,
         progressive: 4, realised: 4, drought: 4, positional: 4,
         // rising: the rate climbs with breadth, so the ticket needs it
-        overdue: 10, hotzone: 8, regression: 8,
+        overdue: 10, hotzone: 8,
         // mild tilt off the default
         regime: 7, sector: 7, momentum: 7
         // everything else measured flat enough that 6 is as good as anything
@@ -286,8 +286,6 @@
                 sector: { name: "Sector", method: "Recent Row/Column Bias", description: "Scores every row and column over the last ~60 draws against its expected share, takes the two strongest, and picks the most overdue numbers inside them. Positional reads the whole session, so it cannot see a bias that started recently.", usage: "Best for: A board where one band has started running hot." },
                 edge: { name: "Edge", method: "Kelly-Inspired Meta", description: "Kelly-inspired: scores each strategy by its realised profit per unit staked this session, shrunk toward zero by how many rounds it has actually run, then blends the top few weighted by that edge. Falls back to a fixed slate while nothing has shown an edge yet.", usage: "Best for: Leaning on whatever has actually been paying in THIS session." },
                 // User-pasted strategies (2026-05-13)
-                delta: { name: "Delta", method: "Sequential Gap Pattern", description: "Looks at the gaps between numbers within past draws and finds the most frequently recurring run of three consecutive gaps. Anchors on the hottest number and tiles that run around the board, wrapping at the ends.", usage: "Best for: Sessions of 30+ games where gap structure may repeat." },
-                regression: { name: "Regression", method: "Linear Trend on Intervals", description: "Linear regression on each number's last 15 occurrence intervals. Scores numbers with statistically meaningful negative slope (decreasing gaps → accelerating). r² > 0.25 gate.", usage: "Best for: 40+ games. Only meaningful if the RNG drifts." },
                 portfolio: { name: "Portfolio", method: "Sharpe-Style Heat/Risk", description: "Heat ÷ entropy as a Sharpe-like ratio. Favors numbers with strong heat AND low variance in their interval pattern.", usage: "Best for: Variance reduction. Doesn't change EV." },
                 anticluster: { name: "Anti-Cluster", method: "Minimum Co-Occurrence", description: "The mirror of Wheeling: greedily builds a set of numbers that have AVOIDED each other in your draws, spreading the ticket across independent draws instead of stacking it on one cluster.", usage: "Best for: More chances at a small hit rather than one big simultaneous one." },
                 realised: { name: "Realised", method: "Return per Unit Staked", description: "Reads your BET history rather than the draws: for every number, the money your paid bets containing it actually returned per unit staked, shrunk toward break-even so one lucky bet cannot top the table. Needs 10+ paid bets.", usage: "Best for: Leaning on what has actually paid you, not what has merely been drawn." },
@@ -2428,8 +2426,6 @@
                 regime: '<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>',
                 sector: '<path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/>',
                 edge: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
-                delta: '<path d="M12 4 4 19h16z"/>',
-                regression: '<path d="M21.3 8.7 8.7 21.3a1 1 0 0 1-1.4 0l-4.6-4.6a1 1 0 0 1 0-1.4L15.3 2.7a1 1 0 0 1 1.4 0l4.6 4.6a1 1 0 0 1 0 1.4z"/><path d="m7.5 10.5 2 2"/><path d="m10.5 7.5 2 2"/><path d="m13.5 4.5 2 2"/>',
                 portfolio: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>',
                 anticluster: '<line x1="7" y1="7" x2="16" y2="9"/><line x1="7" y1="7" x2="9" y2="16"/><line x1="16" y1="9" x2="17" y2="17"/><line x1="9" y1="16" x2="17" y2="17"/><circle cx="7" cy="7" r="2.2"/><circle cx="16" cy="9" r="2.2"/><circle cx="9" cy="16" r="2.2"/><circle cx="17" cy="17" r="2.2"/>',
                 realised: '<path d="M2 12h4l3 8 4-16 3 8h6"/>',
@@ -2808,9 +2804,7 @@
             { id: 'anticluster', name: 'Anti-Cluster' },
             { id: 'balanced', name: 'Balanced' },
             { id: 'poisson', name: 'Poisson' },
-            { id: 'transition', name: 'Transition' },
-            { id: 'delta', name: 'Delta' },
-            { id: 'regression', name: 'Regression' }
+            { id: 'transition', name: 'Transition' }
         ];
 
         populateSideDrawer() {
@@ -2938,8 +2932,6 @@
                 'regime': 'selectRegimeNumbers',
                 'sector': 'selectSectorRotationNumbers',
                 'edge': 'selectEdgeNumbers',
-                'delta': 'selectDeltaPatternNumbers',
-                'regression': 'selectRegressionNumbers',
                 'portfolio': 'selectPortfolioNumbers',
                 'anticluster': 'selectAntiClusterNumbers',
                 'realised': 'selectRealisedReturnNumbers',
@@ -6552,12 +6544,13 @@
                 if (GeminyzerOverlay.BLENDS.includes(strategyId)) return clear();
 
                 // A gated strategy rarely returns a filler's list verbatim — it
-                // returns its own few picks with the rest topped up from Hot. On
-                // random interval data Regression's r^2 > 0.25 gate clears a
-                // median of ONE number, so nine of ten are Hot's and the ticket
-                // looked entirely like Regression's own work. Equality also
-                // misses a prefix: Delta at one spot returns getHotNumbers(3)[0],
-                // which is Hot's top pick but not Hot's array.
+                // returns its own few picks with the rest topped up from Hot, so
+                // an equality test never fires. Overdue clears its own gate for
+                // about 4 of 10 numbers on a fair board and pads the rest, and
+                // the ticket looked entirely like Overdue's own work. Equality
+                // also misses a prefix, and misses a FULL hand-off that differs
+                // only in order — Hotzone, Digit and Parity sort their result
+                // while Hot returns heat order.
                 //
                 // So measure how much of the result the filler actually supplied,
                 // and treat a clear majority as a hand-off.
@@ -7145,101 +7138,7 @@
         }
 
         // ==========================================================================
-        // TAG: USER-PASTED-STRATEGIES (added 2026-05-13)
-        // Delta, Regression, PoissonGap, Portfolio, ComboWays, CondBonus
-        // Fallbacks swapped from getPredictedNumbers → getHotNumbers (not implemented yet).
         // ==========================================================================
-
-        getDeltaPatternNumbers(count = 9) {
-            const siteKey = `${this.storageOrigin}-keno-session`;
-            const results = (this.cachedKenoResults?.[siteKey] || []).slice(0, 50);
-            if (results.length < 30) return this.getHotNumbers(count);
-            // Key on runs of three consecutive gaps, not the whole nine-gap
-            // vector. Two ten-number draws essentially never share a complete
-            // delta vector, so "most frequent pattern" was always a count of 1 —
-            // it picked one arbitrary past game and walked its gaps. A trigram
-            // recurs often enough over 50 games for the frequency to mean
-            // something, and it is still a pattern rather than a bag of gaps.
-            const RUN = 3;
-            const freq = {};
-            results.forEach(g => {
-                const drawn = g?.state?.drawnNumbers;
-                if (!Array.isArray(drawn) || drawn.length < 4) return;
-                const sorted = drawn.map(Number).sort((a, b) => a - b);
-                const d = [];
-                for (let i = 1; i < sorted.length; i++) d.push(sorted[i] - sorted[i - 1]);
-                for (let i = 0; i + RUN <= d.length; i++) {
-                    const k = d.slice(i, i + RUN).join('-');
-                    freq[k] = (freq[k] || 0) + 1;
-                }
-            });
-            const top = Object.entries(freq).sort((a, b) => b[1] - a[1])[0];
-            if (!top) return this.getHotNumbers(count);
-            // Tile the winning run around the ring until the ticket is full.
-            const run = top[0].split('-').map(Number);
-            const bestDeltas = [];
-            while (bestDeltas.length < count) bestDeltas.push(...run);
-            const startNum = this.getHotNumbers(3)[0];
-            const selected = [startNum];
-            let curr = startNum;
-            for (let i = 0; i < bestDeltas.length && selected.length < count; i++) {
-                curr += bestDeltas[i];
-                if (curr > this.numberCount) curr -= this.numberCount;
-                if (curr < 1) curr += this.numberCount;
-                if (!selected.includes(curr)) selected.push(curr);
-            }
-            if (selected.length < count) {
-                const fillers = this.getHotNumbers(count * 2).filter(n => !selected.includes(n));
-                selected.push(...fillers.slice(0, count - selected.length));
-            }
-            return selected.slice(0, count);
-        }
-        selectDeltaPatternNumbers() {
-            const numbers = this.getDeltaPatternNumbers();
-            this.animateSequentialSelection(numbers);
-        }
-
-        getRegressionNumbers(count = 8) {
-            if (this.data.kenoStats.totalBets < 40) return this.getHotNumbers(count);
-
-            if (!this.cachedRegression || (Date.now() - this.lastRegressionCache) > this.CACHE_DURATION) {
-                this.cachedRegression = this.data.kenoStats.perNumberStats.map((s, i) => {
-                    const y = s.lastOccurrences?.slice(-15) || [];
-                    if (y.length < 7) return { n: i + 1, s: 0 };
-
-                    const n = y.length;
-                    const x = Array.from({ length: n }, (_, j) => j);
-                    const sumX = x.reduce((a, b) => a + b, 0);
-                    const sumY = y.reduce((a, b) => a + b, 0);
-                    const sumXY = x.reduce((sum, xi, j) => sum + xi * y[j], 0);
-                    const sumX2 = x.reduce((sum, xi) => sum + xi * xi, 0);
-                    const sumY2 = y.reduce((sum, yi) => sum + yi * yi, 0);
-                    const den = n * sumX2 - sumX * sumX;
-
-                    if (Math.abs(den) < 1e-6) return { n: i + 1, s: 0 };
-
-                    const slope = (n * sumXY - sumX * sumY) / den;
-                    const correlation = (n * sumXY - sumX * sumY) / Math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
-                    const r2 = isNaN(correlation) ? 0 : Math.pow(correlation, 2);
-
-                    const score = r2 > 0.25 ? Math.max(0, -slope * r2) : 0;
-                    return { n: i + 1, s: score };
-                });
-                this.lastRegressionCache = Date.now();
-            }
-            const validResults = this.cachedRegression.filter(x => x.s > 0).sort((a, b) => b.s - a.s);
-            let selection = validResults.map(x => x.n);
-            if (selection.length < count) {
-                const fallbackCount = count - selection.length;
-                const fallbackNumbers = this.getHotNumbers(count + 5).filter(n => !selection.includes(n));
-                selection.push(...fallbackNumbers.slice(0, fallbackCount));
-            }
-            return selection.slice(0, count);
-        }
-        selectRegressionNumbers() {
-            const numbers = this.getRegressionNumbers();
-            this.animateSequentialSelection(numbers);
-        }
 
         getPortfolioNumbers(count = 8) {
             if (this.data.kenoStats.totalBets < 30) return this.getHotNumbers(count);
