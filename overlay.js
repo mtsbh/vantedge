@@ -627,6 +627,7 @@
                 }
                 // Momentum is shared by the status strip and the heatmap arrows;
                 // compute once per refresh and cache.
+                safe(() => this.probeHandoffs());
                 this._momentum = this.computeMomentum();
                 this.refreshMomentumArrows();
                 this.updateStatusStrip();
@@ -2415,6 +2416,7 @@
             `).join('');
             this.setupAltGridInteractions();
             safe(() => this.refreshSpotBadges());
+            safe(() => this.probeHandoffs());
             // Re-apply the AI gold-glow if its pick lives in this view.
             safe(() => this.updateAIRecommendation());
         }
@@ -2534,6 +2536,7 @@
             `).join('');
             this.setupStrategyInteractions();
             safe(() => this.refreshSpotBadges());
+            safe(() => this.probeHandoffs());
         }
 
         getStrategyName(id) {
@@ -2743,6 +2746,10 @@
         }
 
         getSelectMethodName(strategyId) {
+            return this.selectMethodMap()[strategyId];
+        }
+
+        selectMethodMap() {
             const map = {
                 'hot': 'selectHotNumbers',
                 'cold': 'selectColdNumbers',
@@ -2781,7 +2788,7 @@
                 'poisson': 'selectPoissonNumbers',
                 'repeat': 'selectRepeatChaserNumbers'
             };
-            return map[strategyId];
+            return map;
         }
 
         setupSideDrawerInteractions() {
@@ -3676,6 +3683,19 @@
                pointer-events: none;
            }
            .vx-spot-badge.pinned { color: #3fb950; }
+           /* a tile currently returning another strategy's ticket */
+           .vx-handoff {
+               position: absolute;
+               left: 0;
+               right: 0;
+               bottom: -2px;
+               text-align: center;
+               font-size: 8px;
+               font-weight: 700;
+               color: #d29922;
+               letter-spacing: 0.2px;
+               pointer-events: none;
+           }
            .vx-st-btn {
                flex: 1;
                background: transparent;
@@ -5308,6 +5328,7 @@
                 safe(() => api?.storage?.local?.set({ spotMode: mode }));
                 this.renderSpotControl();
                 safe(() => this.refreshSpotBadges());
+            safe(() => this.probeHandoffs());
             };
             el.querySelector('#overlay-spots-auto').onclick = () => setMode('auto');
             el.querySelector('#overlay-spots-sel').onchange = (e) => {
@@ -5315,6 +5336,7 @@
                 setMode(v === '' ? 'auto' : Number(v));
             };
             safe(() => this.refreshSpotBadges());
+            safe(() => this.probeHandoffs());
         }
 
         // Show on each tile how many numbers it will fill, so a click is never
@@ -6239,13 +6261,146 @@
             const spots = this.spotsFor(strategyId);
             const getter = methodName && methodName.replace(/^select/, 'get');
             if (strategyId !== 'variance' && getter && typeof this[getter] === 'function') {
+                this.traceStrategyGetters();
+                this._trace = { depth: 0, nested: [] };
                 const nums = safe(() => this[getter](spots));
+                const trace = this._trace;
+                this._trace = null;
                 if (Array.isArray(nums) && nums.length) {
+                    this.noteStrategyHandoff(strategyId, trace, nums);
                     this.animateSequentialSelection([...nums].sort((a, b) => a - b));
                     return;
                 }
             }
             if (methodName && typeof this[methodName] === 'function') this[methodName]();
+        }
+
+        // Most strategies hand off to another one under a data threshold —
+        // `if (totalBets < 30) return this.getHotNumbers(count)` and so on, 27
+        // times across the file. That is sensible; doing it silently is not,
+        // because clicking Poisson at 18 bets gives you Hot's ticket with
+        // nothing saying so.
+        //
+        // Rather than rewrite 27 call sites, spot it from the outside: a real
+        // hand-off returns the delegate's array verbatim. Blends like Adaptive
+        // and Edge call other strategies too, but they re-rank the votes, so
+        // their result never matches any single ingredient.
+        traceStrategyGetters() {
+            if (this._tracedGetters) return;
+            this._tracedGetters = true;
+            const proto = Object.getPrototypeOf(this);
+            Object.getOwnPropertyNames(proto)
+                .filter(n => /^get[A-Z]\w*Numbers$/.test(n) && typeof proto[n] === 'function')
+                .forEach(name => {
+                    const orig = proto[name];
+                    const overlay = this;
+                    // own property shadows the prototype for this instance only
+                    this[name] = function (...args) {
+                        const t = overlay._trace;
+                        if (t) t.depth++;
+                        let out;
+                        try {
+                            out = orig.apply(this, args);
+                        } finally {
+                            if (t) {
+                                t.depth--;
+                                // depth still > 0 → this ran inside another getter
+                                if (t.depth > 0 && Array.isArray(out)) t.nested.push({ name, out });
+                            }
+                        }
+                        return out;
+                    };
+                });
+        }
+
+        // getHotNumbers -> 'hot', getSectorRotationNumbers -> 'sector'…
+        strategyIdForGetter(getterName) {
+            const stripped = getterName.replace(/^get/, '').replace(/Numbers$/, '');
+            const map = safe(() => this.selectMethodMap()) || {};
+            for (const id in map) {
+                if (map[id] === 'select' + stripped + 'Numbers') return id;
+            }
+            return stripped.toLowerCase();
+        }
+
+        noteStrategyHandoff(strategyId, trace, result) {
+            safe(() => {
+                const same = (a, b) => Array.isArray(a) && a.length === b.length && a.every((v, i) => v === b[i]);
+                const hit = (trace?.nested || []).find(x => same(x.out, result));
+                const delegateId = hit ? this.strategyIdForGetter(hit.name) : null;
+                this._handoffs = this._handoffs || {};
+                if (delegateId && delegateId !== strategyId) this._handoffs[strategyId] = delegateId;
+                else delete this._handoffs[strategyId];
+                if (!this._probing) this.refreshHandoffMarks();
+            });
+        }
+
+        // Work out which tiles are handing off WITHOUT waiting for a click, so a
+        // thin session shows what isn't ready yet up front. Only worth doing
+        // while the data is thin — that's both when hand-offs happen and when
+        // running every strategy is cheap.
+        probeHandoffs() {
+            safe(() => {
+                const bets = this.data.kenoStats.totalBets || 0;
+                if (bets > 80) {                       // past every threshold in the file
+                    if (this._handoffs && Object.keys(this._handoffs).length) {
+                        this._handoffs = {};
+                        this.refreshHandoffMarks();
+                    }
+                    return;
+                }
+                // Already worked out for this bet count — but the grid may have
+                // been rebuilt since (it renders asynchronously after the saved
+                // order loads), so repaint rather than returning empty-handed.
+                if (this._probedAt === bets) { this.refreshHandoffMarks(); return; }
+                this._probedAt = bets;
+                this.traceStrategyGetters();
+                const map = this.selectMethodMap();
+                this._probing = true;                  // paint once at the end, not 35 times
+                Object.keys(map).forEach(id => {
+                    const getter = map[id].replace(/^select/, 'get');
+                    if (typeof this[getter] !== 'function') return;
+                    this._trace = { depth: 0, nested: [] };
+                    const nums = safe(() => this[getter](this.spotsFor(id)));
+                    const trace = this._trace;
+                    this._trace = null;
+                    if (Array.isArray(nums) && nums.length) this.noteStrategyHandoff(id, trace, nums);
+                });
+                this._probing = false;
+                this.refreshHandoffMarks();
+            });
+        }
+
+        // Mark a tile that is currently returning someone else's ticket.
+        refreshHandoffMarks() {
+            const marks = this._handoffs || {};
+            const items = [
+                ...(this.overlay?.querySelectorAll('.action-item') || []),
+                ...document.querySelectorAll('#overlay-side-actions .action-item')
+            ];
+            items.forEach(item => {
+                const id = item.dataset.strategyId;
+                if (!id) return;
+                const to = marks[id];
+                let mark = item.querySelector('.vx-handoff');
+                if (!to) {
+                    if (mark) mark.remove();
+                    if (item.dataset.handoffTitle) {
+                        item.title = '';
+                        delete item.dataset.handoffTitle;
+                    }
+                    return;
+                }
+                const toName = this.getStrategyName(to) || to;
+                if (!mark) {
+                    mark = document.createElement('span');
+                    mark.className = 'vx-handoff';
+                    item.appendChild(mark);
+                }
+                mark.textContent = `→ ${toName}`;
+                item.title = `${this.getStrategyName(id) || id} doesn't have enough data yet — this is ${toName}'s pick.`;
+                item.dataset.handoffTitle = '1';
+            });
         }
 
         // Names the strategies Adaptive is currently blending, on its own tile.
