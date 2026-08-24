@@ -82,8 +82,13 @@
     //   - falling (Progressive 0.320 at rank 2 -> 0.268 by rank 10, Wheeling,
     //     Bayesian, Portfolio) — it is sure about a few numbers and padding after
     //     that, so play few spots.
-    //   - rising (Overdue 0.251 -> 0.277) — its top pick is its worst and it
-    //     only works in aggregate, so play many.
+    //   - rising — the top pick is the worst and it only works in aggregate.
+    //     Read this one carefully: a rising curve can be the strategy padding
+    //     from Hot at the high ranks rather than a real signal. Overdue was set
+    //     to 10 on exactly that reading and it was wrong — at 10 spots it is its
+    //     own strategy only 40% of the time (96% at 4), so the rise was Hot's.
+    //     Any strategy with a fallback is now capped where it stays autonomous:
+    //     Overdue and Digit both at 4.
     //   - flat (Hot, Coverage, Adaptive, EMA) — the signal is spread evenly and
     //     the count barely matters; sit mid-table.
     // Several of the old hand-picked values were backwards: Overdue was 4 and
@@ -104,8 +109,9 @@
         // top-heavy: the rate collapses after the first few picks
         wheeling: 3, bayesian: 3, volatility: 3, portfolio: 3,
         progressive: 4, realised: 4, drought: 4, positional: 4,
+        overdue: 4, digitbias: 4,
         // rising: the rate climbs with breadth, so the ticket needs it
-        overdue: 10, hotzone: 8,
+        hotzone: 8,
         // mild tilt off the default
         regime: 7, sector: 7, momentum: 7
         // everything else measured flat enough that 6 is as good as anything
@@ -2471,26 +2477,34 @@
             // Cold and Variance stay despite negative z. They are contrarian by
             // construction, so underperforming against a planted bias is them
             // working, not failing.
+            // Ordered as a testing path, not a ranking. Each row is a different
+            // KIND of read, so walking the grid one tile at a time tries a new
+            // signal each click instead of re-testing the same axis; and rows go
+            // in the order the data becomes usable (measured: how many games
+            // before a tile stops padding from Hot and is actually itself).
+            //
+            // Row 1 is live from ~10 games, rows 2-3 from ~20-30. Random sits
+            // last as the control you are comparing everything against.
             const defaultPortfolio = [
-                // Row 1 - Core frequency
+                // Row 1 - Frequency. Usable almost immediately.
                 { id: 'hot', name: 'Hot' },
                 { id: 'cold', name: 'Cold' },
+                { id: 'smart', name: 'Smart' },
                 { id: 'ema', name: 'EMA' },
+
+                // Row 2 - Timing: how numbers space themselves out. From ~20-30.
+                { id: 'overdue', name: 'Overdue' },
+                { id: 'progressive', name: 'Progressive' },
+                { id: 'streak', name: 'Streak' },
+                { id: 'entropy', name: 'Entropy' },
+
+                // Row 3 - Shape of the board: where numbers sit, not how often.
+                { id: 'positional', name: 'Positional' },
+                { id: 'sector', name: 'Sector' },
+                { id: 'digitbias', name: 'Digit' },
                 { id: 'coverage', name: 'Coverage' },
 
-                // Row 2 - Momentum
-                { id: 'progressive', name: 'Progressive' },
-                { id: 'repeat', name: 'Repeat' },
-                { id: 'streak', name: 'Streak' },
-                { id: 'wheeling', name: 'Wheeling' },
-
-                // Row 3 - Precision & Meta
-                { id: 'sector', name: 'Sector' },
-                { id: 'portfolio', name: 'Portfolio' },
-                { id: 'digitbias', name: 'Digit' },
-                { id: 'positional', name: 'Positional' },
-
-                // Row 4 - Advanced Meta
+                // Row 4 - Statistical treatments, then the control.
                 { id: 'montecarlo', name: 'Monte Carlo' },
                 { id: 'variance', name: 'Variance' },
                 { id: 'antipattern', name: 'Anti-Pattern' },
@@ -2788,23 +2802,30 @@
         }
 
         // TAG: SIDE-DRAWER
+        // Same idea, ordered by what the measurement says is worth trying.
+        // Row 1 earned a Core slot on signal alone and only missed out because
+        // Core is full; row 4 is here because it measured no signal at all.
         SIDE_DRAWER_DEFAULTS = [
+            // Real own signal, 100% autonomous
+            { id: 'repeat', name: 'Repeat' },
+            { id: 'portfolio', name: 'Portfolio' },
+            { id: 'wheeling', name: 'Wheeling' },
+            { id: 'momentum', name: 'Momentum' },
+            // Blends and meta — these compose other strategies by design
             { id: 'adaptive', name: 'Adaptive' },
             { id: 'edge', name: 'Edge' },
-            { id: 'momentum', name: 'Momentum' },
-            { id: 'smart', name: 'Smart' },
-            { id: 'overdue', name: 'Overdue' },
-            { id: 'parity', name: 'Parity' },
-            { id: 'entropy', name: 'Entropy' },
-            { id: 'hotzone', name: 'Hotzone' },
             { id: 'bayesian', name: 'Bayesian' },
             { id: 'volatility', name: 'Volatility' },
+            // Situational — need a specific condition to say anything
             { id: 'drought', name: 'Drought' },
             { id: 'realised', name: 'Realised' },
+            { id: 'hotzone', name: 'Hotzone' },
+            { id: 'parity', name: 'Parity' },
+            // Contrarian / no measured signal
             { id: 'anticluster', name: 'Anti-Cluster' },
             { id: 'balanced', name: 'Balanced' },
-            { id: 'poisson', name: 'Poisson' },
-            { id: 'transition', name: 'Transition' }
+            { id: 'transition', name: 'Transition' },
+            { id: 'poisson', name: 'Poisson' }
         ];
 
         populateSideDrawer() {
