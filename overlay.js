@@ -1822,6 +1822,14 @@
             let fair = 1;
             for (let i = 0; i < size; i++) fair *= (25 - mineCount - i) / (25 - i);
 
+            // A big group's fair rate is tiny — ten tiles clean on a ten-mine
+            // board happens about once in a thousand rounds — so a SINGLE lucky
+            // round reads as +7000% against it and a return of 77x. Two guards:
+            // a group has to have come through clean more than once to be
+            // listed at all, and the rate is shrunk toward fair by PRIOR
+            // pseudo-rounds, so one hit in fourteen can't masquerade as an edge.
+            const PRIOR = 12;
+            const MIN_CLEAN = 2;
             const out = [];
             const combo = new Array(size);
             const walk = (start, depth) => {
@@ -1830,8 +1838,14 @@
                     for (const t of combo) mask |= (1 << t);
                     let clean = 0;
                     for (let m = 0; m < masks.length; m++) if ((masks[m] & mask) === 0) clean++;
-                    const rate = clean / masks.length;
-                    out.push({ tiles: combo.slice().sort((a, b) => a - b), rate, clean, fair, edge: fair > 0 ? (rate / fair - 1) * 100 : 0 });
+                    if (clean < MIN_CLEAN) return;
+                    const raw = clean / masks.length;
+                    const rate = (clean + fair * PRIOR) / (masks.length + PRIOR);
+                    out.push({
+                        tiles: combo.slice().sort((a, b) => a - b),
+                        rate, raw, clean, rounds: masks.length, fair,
+                        edge: fair > 0 ? (rate / fair - 1) * 100 : 0
+                    });
                     return;
                 }
                 for (let i = start; i <= pool.length - (size - depth); i++) {
@@ -2125,13 +2139,21 @@
         renderMinesClusters() {
             const size = Math.min(this.minesPickSize || 3, Math.max(25 - (this.minesCount || 1) - 1, 1));
             const clusters = this.minesClusters(size);
-            if (!clusters.length) return '';
+            if (!clusters.length) {
+                // Empty because nothing cleared the sample bar, not because the
+                // panel forgot — say which, or the section just vanishes.
+                const { layouts } = this.minesAnalysis();
+                if (layouts >= 10 && this.minesCount && size <= 25 - this.minesCount) {
+                    return `<div class="vx-mines-note">No group of ${size} has come through clean more than once in ${layouts} rounds — nothing here worth reading yet.</div>`;
+                }
+                return '';
+            }
             const rows = clusters.map(c => {
                 const ev = c.rate * this.minesMultiplier(this.minesCount, c.tiles.length);
                 const edgeCls = c.edge > 0 ? 'good' : 'bad';
-                return `<div class="vx-mclust" data-tiles="${c.tiles.join(',')}" title="All ${c.tiles.length} came through clean in ${c.clean} of the rounds. An untouched board gives ${(c.fair * 100).toFixed(0)}%. Click to select them.">
+                return `<div class="vx-mclust" data-tiles="${c.tiles.join(',')}" title="Clean together in ${c.clean} of ${c.rounds} rounds (${(c.raw * 100).toFixed(0)}% raw). An untouched board gives ${(c.fair * 100).toFixed(2)}%. Shown rate is shrunk toward that fair rate so a lucky round doesn't read as an edge. Click to select them.">
                             <span class="vx-mctiles">${c.tiles.map(t => t + 1).join(' · ')}</span>
-                            <span class="vx-mcrate">${(c.rate * 100).toFixed(0)}%</span>
+                            <span class="vx-mcrate">${(c.rate * 100).toFixed(0)}%<i class="vx-mcn">${c.clean}/${c.rounds}</i></span>
                             <span class="vx-mcedge ${edgeCls}">${c.edge > 0 ? '+' : ''}${c.edge.toFixed(0)}%</span>
                             <span class="vx-mcev">${ev.toFixed(2)}</span>
                         </div>`;
@@ -2213,8 +2235,14 @@
         }
 
         // One status-strip tile, shared by the keno and mines strips.
+        // Same markup and classes as the keno strip. It used to emit .vx-stat-k
+        // / .vx-stat-v, whose CSS went away with the strip redesign — leaving the
+        // mines strip unstyled and rendering "Games14" with no gap.
         statTile(label, value, cls = '', title = '') {
-            return `<div class="vx-stat" title="${title}"><span class="vx-stat-k">${label}</span><span class="vx-stat-v ${cls}">${value}</span></div>`;
+            const cls2 = cls === 'hot' ? 'vx-hot-txt' : cls === 'cold' ? 'vx-cold-txt' : cls === 'plneg' ? 'neg' : cls;
+            return `<div class="vx-stat-item" title="${title}">`
+                + `<span class="vx-stat-num ${cls2}">${value}</span>`
+                + `<span class="vx-stat-txt">${label.toUpperCase()}</span></div>`;
         }
 
         kenoMarkup() {
@@ -4082,7 +4110,6 @@
            .vx-mines-mode #enhancement-status { display: none; }
            /* two-up tiles: money and percentages need more room than a quarter
               of the panel gives them */
-           .vx-mines-mode .vx-status-strip { grid-template-columns: repeat(2, 1fr); }
            .vx-mtabs {
                display: flex;
                align-items: center;
@@ -4211,6 +4238,8 @@
            .vx-mclust:hover { border-color: rgba(63, 185, 80, 0.45); background: #111924; }
            .vx-mctiles { color: #e6edf3; font-weight: 600; }
            .vx-mcrate { color: #3fb950; font-weight: 600; }
+           /* the sample behind the rate — a rate without it invites over-reading */
+           .vx-mcn { font-style: normal; font-size: 8px; color: #6e7681; margin-left: 3px; font-weight: 500; }
            .vx-mcedge.good { color: #3fb950; }
            .vx-mcedge.bad { color: #e5534b; }
            .vx-mcev { color: #8b949e; }
