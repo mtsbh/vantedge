@@ -69,7 +69,13 @@
     // which of those ten were drawn, so we get its hit rate at every rank of its
     // OWN ranking. Feed that rate curve through the exact Fisher noncentral
     // hypergeometric for a 10-from-40 draw and Stake's High-risk pay table, and
-    // take the spot count with the best expected value.
+    // take the spot count with the best expected value. The draw is sampled
+    // sequentially with weights, so the distribution is Wallenius noncentral
+    // hypergeometric, NOT Fisher: Fisher understates EV by up to 19% under lift
+    // and picks a different spot count at weak lift. Values below come from
+    // simulating the real process, and only where it beats a plain 6 by more
+    // than ~3% — below that the difference is inside the noise and not worth a
+    // special case (EMA measures k=3 but gains 0.1%, so it keeps the default).
     //
     // What the rate curve says is where a strategy keeps its conviction:
     //   - falling (Progressive 0.320 at rank 2 -> 0.268 by rank 10, Wheeling,
@@ -94,14 +100,15 @@
     // Random — have no measurable concentration, so they keep the default.
     const SPOTS_DEFAULT = 6;
     const STRATEGY_SPOTS = {
-        // rising curve — the ticket needs breadth to work
-        overdue: 9, hotzone: 9, regression: 8,
-        // falling curve — conviction sits in the first few numbers
-        wheeling: 3, bayesian: 3, portfolio: 3, progressive: 4, volatility: 4,
-        // flat curve — spread evenly, mid-table
-        hot: 8, streak: 8, regime: 7, sector: 7,
-        positional: 6, coverage: 6, adaptive: 6, parity: 6, edge: 6,
-        montecarlo: 6, repeat: 6, digitbias: 6, ema: 6, entropy: 6
+        // top-heavy: the rate collapses after the first few picks
+        wheeling: 3, bayesian: 3, volatility: 3, portfolio: 3,
+        delta: 1,
+        progressive: 4, realised: 4, drought: 4, positional: 4,
+        // rising: the rate climbs with breadth, so the ticket needs it
+        overdue: 10, hotzone: 8, regression: 8,
+        // mild tilt off the default
+        regime: 7, sector: 7, momentum: 7
+        // everything else measured flat enough that 6 is as good as anything
     };
 
     const HEAT = {
