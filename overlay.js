@@ -2811,8 +2811,8 @@
             // Blends and meta — these compose other strategies by design
             { id: 'adaptive', name: 'Adaptive' },
             { id: 'edge', name: 'Edge' },
+            { id: 'regime', name: 'Regime' },
             { id: 'bayesian', name: 'Bayesian' },
-            { id: 'volatility', name: 'Volatility' },
             // Situational — need a specific condition to say anything
             { id: 'drought', name: 'Drought' },
             { id: 'realised', name: 'Realised' },
@@ -2822,6 +2822,7 @@
             { id: 'anticluster', name: 'Anti-Cluster' },
             { id: 'balanced', name: 'Balanced' },
             { id: 'transition', name: 'Transition' },
+            { id: 'volatility', name: 'Volatility' },
             { id: 'poisson', name: 'Poisson' }
         ];
 
