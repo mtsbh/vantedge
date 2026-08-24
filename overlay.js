@@ -6512,14 +6512,40 @@
             return stripped.toLowerCase();
         }
 
+        // Strategies that legitimately compose others — saying "this is Hot's
+        // pick" about a declared blend is noise, and Adaptive already names what
+        // it is blending on its own tile.
+        static get BLENDS() { return ['adaptive', 'edge', 'regime']; }
+
         noteStrategyHandoff(strategyId, trace, result) {
             safe(() => {
-                const same = (a, b) => Array.isArray(a) && a.length === b.length && a.every((v, i) => v === b[i]);
-                const hit = (trace?.nested || []).find(x => same(x.out, result));
-                const delegateId = hit ? this.strategyIdForGetter(hit.name) : null;
                 this._handoffs = this._handoffs || {};
-                if (delegateId && delegateId !== strategyId) this._handoffs[strategyId] = delegateId;
-                else delete this._handoffs[strategyId];
+                const clear = () => { delete this._handoffs[strategyId]; };
+                if (!Array.isArray(result) || !result.length) return clear();
+                if (GeminyzerOverlay.BLENDS.includes(strategyId)) return clear();
+
+                // A gated strategy rarely returns a filler's list verbatim — it
+                // returns its own few picks with the rest topped up from Hot. On
+                // random interval data Regression's r^2 > 0.25 gate clears a
+                // median of ONE number, so nine of ten are Hot's and the ticket
+                // looked entirely like Regression's own work. Equality also
+                // misses a prefix: Delta at one spot returns getHotNumbers(3)[0],
+                // which is Hot's top pick but not Hot's array.
+                //
+                // So measure how much of the result the filler actually supplied,
+                // and treat a clear majority as a hand-off.
+                let best = null;
+                for (const call of (trace?.nested || [])) {
+                    const id = this.strategyIdForGetter(call.name);
+                    if (!id || id === strategyId) continue;
+                    if (!Array.isArray(call.out) || !call.out.length) continue;
+                    const from = new Set(call.out);
+                    const n = result.reduce((a, v) => a + (from.has(v) ? 1 : 0), 0);
+                    const frac = n / result.length;
+                    if (frac >= 0.6 && (!best || frac > best.frac)) best = { id, frac, n };
+                }
+                if (best) this._handoffs[strategyId] = { to: best.id, n: best.n, of: result.length };
+                else clear();
                 if (!this._probing) this.refreshHandoffMarks();
             });
         }
@@ -6593,10 +6619,14 @@
                     }
                     return;
                 }
-                const toName = this.getStrategyName(to) || to;
+                const rec = (to && typeof to === 'object') ? to : { to, n: 0, of: 0 };
+                const toName = this.getStrategyName(rec.to) || rec.to;
+                const myName = this.getStrategyName(id) || id;
                 if (mark) mark.remove();          // legacy text mark, if present
                 item.classList.add('vx-borrowed');
-                item.title = `${this.getStrategyName(id) || id} doesn't have enough data yet — this is ${toName}'s pick.`;
+                item.title = (rec.n && rec.n < rec.of)
+                    ? `${myName} only found ${rec.of - rec.n} of ${rec.of} numbers itself — the other ${rec.n} are ${toName}'s.`
+                    : `${myName} doesn't have enough data yet — this is ${toName}'s pick.`;
                 item.dataset.handoffTitle = '1';
             });
         }
