@@ -220,7 +220,7 @@
                 hot: { name: "Hot", method: "Frequency Analysis", description: "Selects the most frequently drawn numbers from all recorded games.", usage: "Best for: Following long-term trends. Top performer!" },
                 cold: { name: "Cold", method: "Inverse Frequency", description: "Chooses the least frequently drawn numbers, based on mean-reversion theory.", usage: "Best for: Contrarian betting." },
                 smart: { name: "Smart", method: "Dynamic Percentile Zoning", description: "Uses percentile-based zones (top 25%, middle 50%, bottom 25%) for balanced coverage with randomized sampling.", usage: "Best for: Comprehensive board coverage with reduced variance." },
-                random: { name: "Random", method: "True Random Selection", description: "Randomly selects 9 numbers with no bias or pattern analysis.", usage: "Best for: Avoiding personal bias, baseline comparison." },
+                random: { name: "Random", method: "True Random Selection", description: "Picks the requested number of spots uniformly at random, with no bias or pattern analysis.", usage: "Best for: Avoiding personal bias, baseline comparison." },
 
                 // Row 2: Statistical Analysis
                 overdue: { name: "Overdue", method: "Regression to Mean", description: "Selects numbers with highest overdue score (betsSince > 1.5x avgInterval). Uses regression to mean theory to find 'due' numbers.", usage: "Best for: Exploiting mean reversion on numbers that should appear soon." },
@@ -236,33 +236,33 @@
                 // Row 4: Pattern Detection
                 antipattern: { name: "Anti-Pattern", method: "Avoidance Analysis", description: "Identifies recently frequent combinations and deliberately avoids them. Works without background correlation data.", usage: "Best for: Advanced contrarian betting." },
                 streak: { name: "Streak", method: "Consecutive Detection", description: "Finds numbers that appeared in back-to-back or near-consecutive games. Catches hot streaks early.", usage: "Best for: Riding momentum on streaking numbers." },
-                volatility: { name: "Volatility", method: "Grid Variance Analysis", description: "Analyzes coefficient of variation in number frequencies to find positions with high statistical volatility. Targets unpredictable but due numbers.", usage: "Best for: Sequential draw dependency — catches patterns temporal misses." },
+                volatility: { name: "Volatility", method: "Grid Variance Analysis", description: "Coefficient of variation of each number's gaps — the spread of its intervals against its own mean interval. High CV means the number arrives in bursts and lulls rather than at a steady pace. The exact mirror of Entropy, which takes the steadiest numbers.", usage: "Best for: Numbers that move in bursts, when you want to be on for the next one." },
                 // Row 5: Precision Methods
-                ema: { name: "EMA", method: "Exponential Moving Average", description: "Recency-weighted frequency with decay alpha=0.15. Recent games count ~6x more than old ones. Superior to Hot for shifting patterns.", usage: "Best for: Live sessions where trends evolve fast." },
+                ema: { name: "EMA", method: "Exponential Moving Average", description: "Recency-weighted frequency. Alpha adapts between 0.15 and 0.30 with how volatile the recent draws are — steadier board, longer memory. Recent games count several times more than old ones, so it turns faster than Hot when a session shifts.", usage: "Best for: Live sessions where trends evolve fast." },
                 digitbias: { name: "Digit", method: "Family Z-Score → Gap", description: "Groups numbers by last digit, scores each family against its expected share of the draws, then picks the most overdue numbers inside the families that clear significance. The family decides the pool; the gap decides the numbers.", usage: "Best for: A board where whole digit families run above their share." },
-                parity: { name: "Parity", method: "Even/Odd Binomial Z-Test", description: "Tests whether even or odd numbers are being drawn at unequal rates. Binomial z-test (p<0.05) — boosts the favored parity class weighted by individual frequency. Works from game 5.", usage: "Best for: Sessions with persistent even/odd draw imbalance." },
+                parity: { name: "Parity", method: "Even/Odd Binomial Z-Test", description: "Binomial z-test on the even/odd split of everything drawn so far. Only when the imbalance clears p<0.05 does it tilt the ticket 70/30 toward the favored class, ranked inside each class by hit count; below significance it hands back to Hot rather than backing a coin flip. Needs ~5 games.", usage: "Best for: Sessions with a persistent, measurable even/odd imbalance." },
 
                 // Row 7: Meta Strategies
                 adaptive: { name: "Adaptive", method: "Session Meta-Strategy", description: "Queries AI performance scores and blends the top 2 recommended strategies weighted by their recent win rates. Dynamically updates as session patterns shift.", usage: "Best for: Any session length. The strategy that picks your strategy." },
-                regime: { name: "Regime", method: "CUSUM Change-Point Detection", description: "Uses CUSUM algorithm to detect if the session has shifted into a hot or cold distributional regime. Switches between Hot-biased and Cold-biased blends automatically based on detected regime.", usage: "Best for: Long sessions (50+ games) where RNG drift is expected." },
+                regime: { name: "Regime", method: "CUSUM Change-Point Detection", description: "Uses CUSUM algorithm to detect if the session has shifted into a hot or cold distributional regime. Switches between Hot-biased and Cold-biased blends automatically based on detected regime.", usage: "Best for: Long sessions (40+ games) where RNG drift is expected." },
                 // New strategies
                 sector: { name: "Sector", method: "Recent Row/Column Bias", description: "Scores every row and column over the last ~60 draws against its expected share, takes the two strongest, and picks the most overdue numbers inside them. Positional reads the whole session, so it cannot see a bias that started recently.", usage: "Best for: A board where one band has started running hot." },
-                edge: { name: "Edge", method: "Kelly-Inspired Meta", description: "Kelly-inspired: favors strategies that performed well recently (uses legend/legendHits if available).", usage: "Best for: Meta-analysis of strategy performance." },
+                edge: { name: "Edge", method: "Kelly-Inspired Meta", description: "Kelly-inspired: scores each strategy by its realised profit per unit staked this session, shrunk toward zero by how many rounds it has actually run, then blends the top few weighted by that edge. Falls back to a fixed slate while nothing has shown an edge yet.", usage: "Best for: Leaning on whatever has actually been paying in THIS session." },
                 // User-pasted strategies (2026-05-13)
-                delta: { name: "Delta", method: "Sequential Gap Pattern", description: "Analyzes deltas (gaps) between numbers in past winning combinations. Picks the most-frequent delta pattern, anchors on the hottest number, then walks the pattern around the 1-40 ring.", usage: "Best for: Sessions of 30+ games where gap structure may repeat." },
+                delta: { name: "Delta", method: "Sequential Gap Pattern", description: "Looks at the gaps between numbers within past draws and finds the most frequently recurring run of three consecutive gaps. Anchors on the hottest number and tiles that run around the board, wrapping at the ends.", usage: "Best for: Sessions of 30+ games where gap structure may repeat." },
                 regression: { name: "Regression", method: "Linear Trend on Intervals", description: "Linear regression on each number's last 15 occurrence intervals. Scores numbers with statistically meaningful negative slope (decreasing gaps → accelerating). r² > 0.25 gate.", usage: "Best for: 40+ games. Only meaningful if the RNG drifts." },
                 portfolio: { name: "Portfolio", method: "Sharpe-Style Heat/Risk", description: "Heat ÷ entropy as a Sharpe-like ratio. Favors numbers with strong heat AND low variance in their interval pattern.", usage: "Best for: Variance reduction. Doesn't change EV." },
                 anticluster: { name: "Anti-Cluster", method: "Minimum Co-Occurrence", description: "The mirror of Wheeling: greedily builds a set of numbers that have AVOIDED each other in your draws, spreading the ticket across independent draws instead of stacking it on one cluster.", usage: "Best for: More chances at a small hit rather than one big simultaneous one." },
                 realised: { name: "Realised", method: "Return per Unit Staked", description: "Reads your BET history rather than the draws: for every number, the money your paid bets containing it actually returned per unit staked, shrunk toward break-even so one lucky bet cannot top the table. Needs 10+ paid bets.", usage: "Best for: Leaning on what has actually paid you, not what has merely been drawn." },
                 // Re-added historical strategies
                 bayesian: { name: "Bayesian", method: "Dynamic Posterior Update", description: "Maintains a Bayesian posterior for each number's hit probability, updating after every draw. Selects numbers with the highest posterior-weighted scores.", usage: "Best for: Statistically grounded probability estimates that sharpen with more data." },
-                montecarlo: { name: "MonteCarlo", method: "200-Sim Weighted Sampling", description: "Runs 200 simulations of future draws using empirical frequencies, then picks the 9 numbers that appear most across all simulations.", usage: "Best for: Robust picks under uncertainty — smooths over small-sample noise." },
+                montecarlo: { name: "MonteCarlo", method: "200-Sim Weighted Sampling", description: "Runs up to 200 simulations of a draw, sampling without replacement weighted by each number's hit count, and takes the numbers that come up most often. Since the weights are the hit counts, this is Hot with sampling noise on top — the jitter is the point, not a separate signal.", usage: "Best for: Playing the hot end of the board without picking the identical ticket every time." },
                 coverage: { name: "Coverage", method: "Hot + Max-Spread Hybrid", description: "Selects top hot numbers plus additional numbers that maximize coverage of the board, combining frequency bias with spatial spread.", usage: "Best for: Maximizing partial hits by covering both hot zones and gaps." },
-                wheeling: { name: "Wheeling", method: "Correlation-Based Expansion", description: "Seeds from the hottest number then expands by finding its most correlated partners — numbers that frequently appear together.", usage: "Best for: Sites with co-occurrence data. Builds a synergistic set." },
+                wheeling: { name: "Wheeling", method: "Correlation-Based Expansion", description: "Seeds from the hottest number then expands by finding its most correlated partners — numbers that frequently appear together.", usage: "Best for: Any site — the pair counts come from your own recent draws. Builds a synergistic set." },
                 drought: { name: "Drought", method: "Rate vs Its Own Pace", description: "Numbers whose recent rate has fallen furthest below THEIR OWN session pace — not below the flat expectation. A number can run hot all session and still be in a personal drought right now.", usage: "Best for: A dip in a number that has otherwise been good to you." },
-                balanced: { name: "Balanced", method: "Zone-Based Coverage", description: "Divides the board into zones (low/mid/high) and selects proportional representatives from each, ensuring no zone is over- or under-represented.", usage: "Best for: Avoiding clustering bias — maximizes board coverage systematically." },
+                balanced: { name: "Balanced", method: "Zone-Based Coverage", description: "Splits the board into four equal zones and takes an equal share from each, picking inside a zone the numbers sitting CLOSEST to the expected hit count — the unremarkable ones, not the hot or cold tails.", usage: "Best for: Spreading a ticket evenly and deliberately avoiding both tails." },
                 momentum: { name: "Momentum", method: "Recent-Interval Acceleration", description: "Scores each number by comparing its recent gap intervals to its long-term average. Numbers appearing faster than usual get high momentum scores.", usage: "Best for: Spotting numbers whose appearance rate is currently accelerating." },
-                poisson: { name: "Poisson", method: "Poisson Survival Probability", description: "Models each number's gap as a Poisson process (λ = avgInterval). Scores by survival probability — how overdue a number is relative to its expected rate.", usage: "Best for: 50+ games. The most statistically grounded gap strategy." },
+                poisson: { name: "Poisson", method: "Poisson Survival Probability", description: "Models each number's gap as a Poisson process, with λ its mean gap over the whole session (games ÷ hits). Scores by survival probability — the chance a gap this long would happen at that rate, so the most improbably overdue numbers rank highest.", usage: "Best for: 30+ games. The most statistically grounded gap strategy." },
                 repeat: { name: "Repeat", method: "Lag-1 Autocorrelation", description: "Given a number was drawn, how often it was drawn again in the very next game, against the 0.25 chance rate and shrunk toward it. The only strategy that reads draw ORDER — every other one treats the session as an unordered pile of counts.", usage: "Best for: Boards where numbers come in back-to-back runs." }
             };
 
@@ -5660,11 +5660,16 @@
 
             return stats
                 .map((s, i) => {
-                    if (s.count < 5 || s.entropy <= 0) return { n: i + 1, score: 0 };
-                    // High entropy = inconsistent intervals = volatile number
-                    // Boost by frequency to ensure we're not just picking noise
-                    const volatilityScore = s.entropy * Math.log(s.count + 1);
-                    return { n: i + 1, score: volatilityScore };
+                    if (s.count < 5 || s.entropy <= 0 || s.avgInterval <= 0) return { n: i + 1, score: 0 };
+                    // Coefficient of variation, the mirror of what Entropy ranks.
+                    // `entropy` is the spread of the number's gaps in games, and
+                    // raw spread scales with gap length, so ranking it directly
+                    // just surfaced whichever numbers were rarest. Dividing by the
+                    // mean gap makes it a shape measure — genuinely erratic rather
+                    // than merely infrequent. Weighted by appearances so a number
+                    // seen five times can't out-rank one seen fifty on noise.
+                    const cv = s.entropy / s.avgInterval;
+                    return { n: i + 1, score: cv * Math.log(s.count + 1) };
                 })
                 .filter(x => x.score > 0)
                 .sort((a, b) => b.score - a.score)
@@ -5989,16 +5994,22 @@
 
             // Dynamic alpha: measure recent volatility (std dev of draw-set sizes over last 20 games)
             // High volatility → higher alpha (react faster), low volatility → lower alpha (smoother)
-            const recentWindow = results.slice(-20);
+            // kenoResults is NEWEST-first (background.js unshifts and sorts by
+            // timestamp descending), so the recent window is the head, not the tail.
+            const recentWindow = results.slice(0, 20);
             const sizes = recentWindow.map(r => r?.state?.drawnNumbers?.length || 0);
             const meanSize = sizes.reduce((a, b) => a + b, 0) / sizes.length;
             const variance = sizes.reduce((a, b) => a + Math.pow(b - meanSize, 2), 0) / sizes.length;
             const volatility = Math.sqrt(variance) / (meanSize || 1);
             const alpha = Math.min(0.30, Math.max(0.15, 0.20 + volatility * 0.5));
 
-            // Process oldest → newest so recent games carry the highest weight
+            // Process oldest → newest so recent games carry the highest weight.
+            // The array is newest-first, so that means walking it BACKWARDS.
+            // Walking it forwards left ema = Σ α(1-α)^(T-t)·x_t with the oldest
+            // game as the last term — i.e. the single heaviest weight sat on the
+            // oldest draw in the session, exactly inverting the strategy.
             const ema = new Array(this.numberCount).fill(0);
-            for (let i = 0; i < results.length; i++) {
+            for (let i = results.length - 1; i >= 0; i--) {
                 const drawn = results[i]?.state?.drawnNumbers;
                 if (!drawn) continue;
                 const drawnSet = new Set(drawn);
@@ -6085,7 +6096,8 @@
         getParityNumbers(count = 9) {
             const hot = this.data.kenoStats.hotNumbers;
             const total = hot.reduce((s, v) => s + v, 0);
-            if (total < 5) return this.getHotNumbers(count);
+            const perGame = this._drawnPerGame || 10;
+            if (total < perGame * 5) return this.getHotNumbers(count);   // needs ~5 games
 
             // Which parity (even / odd) has been drawn more?
             let evenTotal = 0, oddTotal = 0;
@@ -6093,7 +6105,15 @@
                 if ((i + 1) % 2 === 0) evenTotal += hot[i];
                 else oddTotal += hot[i];
             }
-            const favorEven = evenTotal >= oddTotal;
+
+            // The board splits exactly in half either way (20/20 on 40, 28/28 on
+            // 56), so a drawn number is even with p = 0.5. Without a significance
+            // gate this always declared a winner — on a fair board that is a coin
+            // flip, so the strategy was "Hot, restricted to a parity picked at
+            // random". Only claim a bias the count actually supports.
+            const z = (evenTotal - total * 0.5) / (Math.sqrt(total * 0.25) || 1);
+            if (Math.abs(z) < 1.96) return this.getHotNumbers(count);     // p >= 0.05
+            const favorEven = z > 0;
 
             // Split numbers into favored and other parity, ranked by hot count within each group
             const favored = [], other = [];
@@ -6454,13 +6474,25 @@
         probeHandoffs() {
             safe(() => {
                 const bets = this.data.kenoStats.totalBets || 0;
-                if (bets > 80) {                       // past every threshold in the file
-                    if (this._handoffs && Object.keys(this._handoffs).length) {
-                        this._handoffs = {};
-                        this.refreshHandoffMarks();
+                if (bets > 80) {                       // past every data threshold
+                    // Clear the thin-session marks once on the way past the cap,
+                    // then leave the map alone. Not every hand-off is about thin
+                    // data: Parity hands back to Hot whenever the even/odd split
+                    // isn't significant, and Edge falls back to its fixed slate
+                    // until something shows an edge — either can happen at 300
+                    // games. Those are found by clicking (runStrategy calls
+                    // noteStrategyHandoff), and wiping the map on every bet
+                    // erased them again before they could be seen.
+                    if (!this._handoffCapCleared) {
+                        this._handoffCapCleared = true;
+                        if (this._handoffs && Object.keys(this._handoffs).length) {
+                            this._handoffs = {};
+                        }
                     }
+                    this.refreshHandoffMarks();
                     return;
                 }
+                this._handoffCapCleared = false;
                 // Already worked out for this bet count — but the grid may have
                 // been rebuilt since (it renders asynchronously after the saved
                 // order loads), so repaint rather than returning empty-handed.
@@ -6703,7 +6735,10 @@
                 const windowSize = 10;
                 const hitRates = [];
 
-                for (let i = results.length - 1; i >= results.length - lookback; i--) {
+                // Newest-first array: the head IS the recent end. This counted
+                // down from the tail, so hitRates[0] was the OLDEST game and the
+                // CUSUM below ran over the oldest ten draws of the session.
+                for (let i = 0; i < lookback; i++) {
                     const drawn = results[i]?.state?.drawnNumbers;
                     if (!drawn || drawn.length === 0) continue;
                     let avgFreq = 0;
@@ -6920,22 +6955,64 @@
                 return this.getAdaptiveNumbers(count);
             }
 
-            const votes = new Float32Array(this.numberCount + 1);
-            const strategies = ['ema', 'positional', 'hot', 'repeat', 'sector'];
+            // Kelly-inspired means weighting by realised edge, and this used to
+            // hand every strategy a flat 2.0 with a "can be enhanced later" note —
+            // so it was a fixed equal-weight vote of five strategies wearing a
+            // performance-weighted label, and it tracked Adaptive closely because
+            // neither was reading anything session-specific.
+            //
+            // The Kelly-relevant quantity is profit per unit staked, which is what
+            // the performance record already holds: totalMultiplier / totalGames
+            // is the average return of a bet placed on that strategy, so that
+            // minus 1 is its edge. Shrink toward zero by sample size so a
+            // strategy with one lucky round can't own the vote.
+            const siteKey = `${this.storageOrigin}-keno-session`;
+            const perf = this.foldStrategyAliases(this.data.kenoStrategyPerformance?.[siteKey], (a, b) => ({
+                totalGames: (a?.totalGames || 0) + (b?.totalGames || 0),
+                wins: (a?.wins || 0) + (b?.wins || 0),
+                totalMultiplier: (a?.totalMultiplier || 0) + (b?.totalMultiplier || 0),
+                maxMultiplier: Math.max(a?.maxMultiplier || 0, b?.maxMultiplier || 0)
+            }));
+            const getters = {
+                ema: (c) => this.getEMANumbers(c),
+                positional: (c) => this.getPositionalNumbers(c),
+                hot: (c) => this.getHotNumbers(c),
+                repeat: (c) => this.getRepeatChaserNumbers(c),
+                sector: (c) => this.getSectorRotationNumbers(c),
+                cold: (c) => this.getColdNumbers(c),
+                overdue: (c) => this.getOverdueNumbers(c),
+                streak: (c) => this.getStreakNumbers(c),
+                drought: (c) => this.getDroughtReboundNumbers(c),
+                realised: (c) => this.getRealisedReturnNumbers(c),
+                digitbias: (c) => this.getDigitBiasNumbers(c),
+                anticluster: (c) => this.getAntiClusterNumbers(c)
+            };
+            const edgeOf = (id) => {
+                const p = perf[id];
+                const games = p?.totalGames || 0;
+                if (!games) return 0;
+                const avgMult = (p.totalMultiplier || 0) / games;
+                return Math.max(0, avgMult - 1) * (games / (games + 30));   // shrunk
+            };
 
-            strategies.forEach(strat => {
-                const weight = 2.0; // Can be enhanced with real performance tracking later
-                try {
-                    let nums = [];
-                    switch (strat) {
-                        case 'ema': nums = this.getEMANumbers(12); break;
-                        case 'positional': nums = this.getPositionalNumbers(12); break;
-                        case 'hot': nums = this.getHotNumbers(12); break;
-                        case 'repeat': nums = this.getRepeatChaserNumbers(12); break;
-                        case 'sector': nums = this.getSectorRotationNumbers(12); break;
-                    }
-                    nums.forEach(n => votes[n] += weight);
-                } catch (e) { }
+            let weighted = Object.keys(getters)
+                .map(id => ({ id, w: edgeOf(id) }))
+                .filter(x => x.w > 0)
+                .sort((a, b) => b.w - a.w)
+                .slice(0, 5);
+
+            // Nothing in this session has shown an edge yet — say so by falling
+            // back to the old fixed slate rather than inventing weights.
+            if (!weighted.length) {
+                weighted = ['ema', 'positional', 'hot', 'repeat', 'sector'].map(id => ({ id, w: 1 }));
+            }
+            this._edgeBlend = weighted.map(x => `${this.getStrategyName(x.id) || x.id}`).join(' + ');
+
+            const votes = new Float32Array(this.numberCount + 1);
+            const top = weighted[0].w || 1;
+            weighted.forEach(({ id, w }) => {
+                const weight = 1 + (w / top);              // 1..2, best strategy doubled
+                try { getters[id](12).forEach(n => { votes[n] += weight; }); } catch (e) { }
             });
 
             return Array.from({ length: this.numberCount }, (_, i) => ({
@@ -6963,20 +7040,31 @@
             const siteKey = `${this.storageOrigin}-keno-session`;
             const results = (this.cachedKenoResults?.[siteKey] || []).slice(0, 50);
             if (results.length < 30) return this.getHotNumbers(count);
-            const deltas = [];
+            // Key on runs of three consecutive gaps, not the whole nine-gap
+            // vector. Two ten-number draws essentially never share a complete
+            // delta vector, so "most frequent pattern" was always a count of 1 —
+            // it picked one arbitrary past game and walked its gaps. A trigram
+            // recurs often enough over 50 games for the frequency to mean
+            // something, and it is still a pattern rather than a bag of gaps.
+            const RUN = 3;
+            const freq = {};
             results.forEach(g => {
-                if (g?.state?.drawnNumbers?.length >= 4) {
-                    const sorted = g.state.drawnNumbers.map(Number).sort((a, b) => a - b);
-                    const d = [];
-                    for (let i = 1; i < sorted.length; i++) { d.push(sorted[i] - sorted[i - 1]); }
-                    deltas.push(d);
+                const drawn = g?.state?.drawnNumbers;
+                if (!Array.isArray(drawn) || drawn.length < 4) return;
+                const sorted = drawn.map(Number).sort((a, b) => a - b);
+                const d = [];
+                for (let i = 1; i < sorted.length; i++) d.push(sorted[i] - sorted[i - 1]);
+                for (let i = 0; i + RUN <= d.length; i++) {
+                    const k = d.slice(i, i + RUN).join('-');
+                    freq[k] = (freq[k] || 0) + 1;
                 }
             });
-            const freq = {};
-            deltas.forEach(p => { const k = p.join('-'); freq[k] = (freq[k] || 0) + 1; });
             const top = Object.entries(freq).sort((a, b) => b[1] - a[1])[0];
             if (!top) return this.getHotNumbers(count);
-            const bestDeltas = top[0].split('-').map(Number);
+            // Tile the winning run around the ring until the ticket is full.
+            const run = top[0].split('-').map(Number);
+            const bestDeltas = [];
+            while (bestDeltas.length < count) bestDeltas.push(...run);
             const startNum = this.getHotNumbers(3)[0];
             const selected = [startNum];
             let curr = startNum;
