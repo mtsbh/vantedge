@@ -63,15 +63,45 @@
     }
 
     // What each strategy is worth playing at when the spot control is on Auto.
-    // A gap read is strongest on its few most extreme numbers; a coverage read
-    // is about spread and wants a wide ticket; the frequency reads sit in the
-    // 4-6 band where hit frequency and payout balance out. Anything not listed
-    // uses SPOTS_DEFAULT.
+    //
+    // These used to be assigned by feel. They are now measured. Method: replay a
+    // long session game by game, ask each strategy for its top 10 and record
+    // which of those ten were drawn, so we get its hit rate at every rank of its
+    // OWN ranking. Feed that rate curve through the exact Fisher noncentral
+    // hypergeometric for a 10-from-40 draw and Stake's High-risk pay table, and
+    // take the spot count with the best expected value.
+    //
+    // What the rate curve says is where a strategy keeps its conviction:
+    //   - falling (Progressive 0.320 at rank 2 -> 0.268 by rank 10, Wheeling,
+    //     Bayesian, Portfolio) — it is sure about a few numbers and padding after
+    //     that, so play few spots.
+    //   - rising (Overdue 0.251 -> 0.277, Regression 0.221 -> 0.301) — its top
+    //     pick is its worst and it only works in aggregate, so play many.
+    //   - flat (Hot, Coverage, Adaptive, EMA) — the signal is spread evenly and
+    //     the count barely matters; sit mid-table.
+    // Several of the old hand-picked values were backwards: Overdue was 4 and
+    // measures 9, Portfolio was 8 and measures 3, Hotzone was 6 and measures 9.
+    //
+    // IMPORTANT — what this is not. On a fair board the expected value is 0.990
+    // at every spot count from 1 to 10, identical to three decimals, because each
+    // row of the pay table is built to the same 99% RTP. Stake keno is provably
+    // fair, so none of this buys an edge, and no spot count is worth more than
+    // another there. The rate curves above were measured on a deliberately biased
+    // board, which is what makes them a property of the STRATEGY (where in its
+    // own ranking it concentrates its picks) rather than of any real board. The
+    // strategies whose curve stayed flat at 0.25 even against a real bias —
+    // Cold, Variance, Transition, Anti-Pattern, Poisson, Anti-Cluster, Balanced,
+    // Random — have no measurable concentration, so they keep the default.
     const SPOTS_DEFAULT = 6;
     const STRATEGY_SPOTS = {
-        overdue: 4, repeat: 4, drought: 4, streak: 4, volatility: 4,
-        wheeling: 5, anticluster: 8, coverage: 8, portfolio: 8, balanced: 8,
-        sector: 6, hotzone: 6, positional: 6, digitbias: 6, parity: 6
+        // rising curve — the ticket needs breadth to work
+        overdue: 9, hotzone: 9, regression: 8,
+        // falling curve — conviction sits in the first few numbers
+        wheeling: 3, bayesian: 3, portfolio: 3, progressive: 4, volatility: 4,
+        // flat curve — spread evenly, mid-table
+        hot: 8, streak: 8, regime: 7, sector: 7,
+        positional: 6, coverage: 6, adaptive: 6, parity: 6, edge: 6,
+        montecarlo: 6, repeat: 6, digitbias: 6, ema: 6, entropy: 6
     };
 
     const HEAT = {
@@ -1956,6 +1986,26 @@
             return safe(() => {
                 const { tiles: want, cols } = this.minesBoardSize();
                 const rows = Math.round(want / cols);
+                const accept = (els) => {
+                    this._minesTiles = els;
+                    this._minesTilesAt = now;
+                    this._minesBoardFound = true;
+                    return els;
+                };
+
+                // 1. Stake labels every tile `data-testid="game-tile-N"`. When the
+                //    game names its own board, trust that over any geometry guess —
+                //    guessing by shape can lock onto the site's left nav, which is
+                //    also a run of equal-sized squares on a regular grid.
+                const tagged = Array.from(document.querySelectorAll('[data-testid^="game-tile-"]'))
+                    .filter(el => !el.closest('#geminyzer-overlay'))
+                    .map(el => ({ el, i: parseInt((String(el.dataset.testid).match(/(\d+)$/) || [])[1], 10) }))
+                    .filter(x => Number.isFinite(x.i))
+                    .sort((a, b) => a.i - b.i);
+                if (tagged.length >= want) return accept(tagged.slice(0, want).map(x => x.el));
+
+                // 2. Other sites don't tag their tiles, so fall back to shape: a
+                //    block of equal-sized squares sitting on a regular grid.
                 const buckets = new Map();
                 const nodes = document.querySelectorAll('button, div, span, [role="button"], td, li, svg, canvas');
                 for (const el of nodes) {
@@ -1964,30 +2014,34 @@
                     if (r.width < 28 || r.height < 28 || r.width > 260) continue;
                     if (Math.abs(r.width - r.height) > r.width * 0.3) continue;   // square-ish
                     if (el.children.length > 3) continue;                          // a tile, not a container
-                    // same-size elements land in the same bucket (2px tolerance)
                     const key = `${Math.round(r.width / 2)}x${Math.round(r.height / 2)}`;
                     if (!buckets.has(key)) buckets.set(key, []);
                     buckets.get(key).push({ el, r });
                 }
-                let best = null;
-                for (const [, list] of buckets) {
-                    if (list.length < want) continue;
-                    // A board is a regular grid: `cols` distinct left positions
-                    // and `rows` distinct tops, tolerant of a pixel or two.
+                // Does this exact set of `want` tiles form a rows x cols grid?
+                const isGrid = (picked) => {
+                    if (picked.length !== want) return false;
                     const near = (vals, v) => vals.find(x => Math.abs(x - v) < 6);
                     const xs = [], ys = [];
-                    for (const t of list) {
+                    for (const t of picked) {
                         if (near(xs, t.r.left) === undefined) xs.push(t.r.left);
                         if (near(ys, t.r.top) === undefined) ys.push(t.r.top);
                     }
-                    if (xs.length < cols || ys.length < rows) continue;
-                    // take the tightest `want` of them, closest to the centre of mass
+                    return xs.length === cols && ys.length === rows;
+                };
+                let best = null;
+                for (const [, list] of buckets) {
+                    if (list.length < want) continue;
                     const cx = list.reduce((a, t) => a + t.r.left, 0) / list.length;
                     const cy = list.reduce((a, t) => a + t.r.top, 0) / list.length;
-                    const picked = list
-                        .slice()
-                        .sort((a, b) => (Math.hypot(a.r.left - cx, a.r.top - cy)) - (Math.hypot(b.r.left - cx, b.r.top - cy)))
+                    const picked = list.slice()
+                        .sort((a, b) => Math.hypot(a.r.left - cx, a.r.top - cy) - Math.hypot(b.r.left - cx, b.r.top - cy))
                         .slice(0, want);
+                    // Validate the tiles actually taken, not the bucket they came
+                    // from. The old check passed as long as the BUCKET spanned
+                    // enough rows and columns, so a bucket holding the board plus
+                    // unrelated squares could hand back a set that was never a grid.
+                    if (!isGrid(picked)) continue;
                     if (!best || picked.length > best.length) best = picked;
                 }
                 if (!best) {
@@ -1996,12 +2050,8 @@
                     this._minesBoardFound = false;
                     return null;
                 }
-                // Row-major, the order the games index tiles by.
                 best.sort((a, b) => (Math.abs(a.r.top - b.r.top) > 6 ? a.r.top - b.r.top : a.r.left - b.r.left));
-                this._minesTiles = best.map(t => t.el);
-                this._minesTilesAt = now;
-                this._minesBoardFound = true;
-                return this._minesTiles;
+                return accept(best.map(t => t.el));
             });
         }
 
