@@ -204,7 +204,15 @@
             this._storageListeners = [];
             // Bump when the curated main/drawer strategy set changes so a stale saved
             // strategyOrder/sideDrawerStrategies is reset to the new defaults once.
-            this.LAYOUT_VERSION = 4;
+            //
+            // 5: Core and Alternative membership and order both changed (Parity out,
+            // Coverage in, Delta and Regression removed, both grids re-sorted). This
+            // was missed at the time, and the effect was silent: the saved order is
+            // honoured verbatim whenever its LENGTH still matches, so an existing
+            // install kept rendering the old sixteen ids. Parity stayed in Core,
+            // Coverage never appeared in either grid, and Alternative showed 15
+            // because Parity was occupying a Core slot and got filtered out of it.
+            this.LAYOUT_VERSION = 5;
 
             const browserAPI = (typeof browser !== 'undefined' && browser?.storage) ? browser :
                 (typeof chrome !== 'undefined' && chrome?.storage) ? chrome : null;
