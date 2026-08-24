@@ -627,6 +627,7 @@
                 }
                 // Momentum is shared by the status strip and the heatmap arrows;
                 // compute once per refresh and cache.
+                safe(() => this.probeHandoffs());
                 this._momentum = this.computeMomentum();
                 this.refreshMomentumArrows();
                 this.updateStatusStrip();
@@ -1670,6 +1671,28 @@
 
         // --- payout math ---------------------------------------------------
 
+        // How big the board actually is. Stake and Shuffle deal a 5x5, but
+        // Rainbet runs other grid sizes, and every tile index, expectation and
+        // payout below depends on the count — so read it from the rounds rather
+        // than assuming 25. Round the largest index seen up to the next square.
+        minesBoardSize() {
+            const games = this._minesGames || [];
+            let max = -1;
+            for (let i = 0; i < games.length && i < 200; i++) {
+                const st = games[i]?.state;
+                for (const m of (st?.mines || [])) { const v = parseInt(m, 10); if (v > max) max = v; }
+                for (const r of (st?.rounds || [])) {
+                    const v = parseInt(r?.field ?? r, 10);
+                    if (v > max) max = v;
+                }
+            }
+            if (max < 0) return { tiles: 25, cols: 5 };
+            for (const cols of [3, 4, 5, 6, 7, 8]) {
+                if (max < cols * cols) return { tiles: cols * cols, cols };
+            }
+            return { tiles: 25, cols: 5 };
+        }
+
         // What the board pays for `revealed` gems in a row with `mineCount`
         // mines: (1 − 1% house edge) / P(that many safe picks), which works out
         // to 0.99 × C(25,k) / C(25−M,k). Rounded to cents with exact halves
@@ -1677,7 +1700,7 @@
         // is exactly 1.125 and shows as 1.12x). Checked row by row against a
         // published 3-mine ladder and against 16-mine values.
         minesMultiplier(mineCount, revealed) {
-            const N = 25;
+            const N = this.minesBoardSize().tiles;
             if (!(mineCount > 0) || revealed <= 0 || revealed > N - mineCount) return 0;
             let m = 0.99;
             for (let i = 0; i < revealed; i++) m *= (N - i) / (N - mineCount - i);
@@ -1726,7 +1749,7 @@
             const out = [];
             for (const r of rounds) {
                 const f = parseInt(r?.field ?? r, 10);
-                if (f >= 0 && f < 25) out.push(f);
+                if (f >= 0 && f < this.minesBoardSize().tiles) out.push(f);
             }
             return out;
         }
@@ -1738,7 +1761,8 @@
             const key = `${this.minesCount}:${games.length}:${this._minesGames.length}`;
             if (this._minesAnalysisCache?.key === key) return this._minesAnalysisCache.value;
 
-            const hits = new Array(25).fill(0);
+            const N = this.minesBoardSize().tiles;
+            const hits = new Array(N).fill(0);
             const masks = [];   // one 25-bit mine mask per round, for cluster lookups
             for (const g of games) {
                 const mines = g.state?.mines;
@@ -1746,7 +1770,7 @@
                 let mask = 0;
                 for (let i = 0; i < mines.length; i++) {
                     const pos = parseInt(mines[i], 10);
-                    if (pos >= 0 && pos < 25) { hits[pos]++; mask |= (1 << pos); }
+                    if (pos >= 0 && pos < N) { hits[pos]++; mask |= (1 << pos); }
                 }
                 masks.push(mask);
             }
@@ -1786,10 +1810,12 @@
         // `share` is the observed split, `expected` what an even spread gives.
         minesRegions(hits) {
             const regions = { corner: [], edge: [], center: [] };
-            for (let i = 0; i < 25; i++) {
-                const r = Math.floor(i / 5), c = i % 5;
-                const onEdge = r === 0 || r === 4 || c === 0 || c === 4;
-                const corner = (r === 0 || r === 4) && (c === 0 || c === 4);
+            const { cols } = this.minesBoardSize();
+            const last = cols - 1;
+            for (let i = 0; i < cols * cols; i++) {
+                const r = Math.floor(i / cols), c = i % cols;
+                const onEdge = r === 0 || r === last || c === 0 || c === last;
+                const corner = (r === 0 || r === last) && (c === 0 || c === last);
                 regions[corner ? 'corner' : onEdge ? 'edge' : 'center'].push(i);
             }
             const total = hits.reduce((a, b) => a + b, 0);
@@ -1798,7 +1824,7 @@
                 return {
                     name, tiles: tiles.length,
                     share: total ? (seen / total) * 100 : 0,
-                    expected: (tiles.length / 25) * 100,
+                    expected: (tiles.length / (cols * cols)) * 100,
                     seen
                 };
             });
@@ -1812,15 +1838,24 @@
         minesClusters(size, limit = 3) {
             const { hits, masks, layouts } = this.minesAnalysis();
             const mineCount = this.minesCount;
-            if (layouts < 10 || !mineCount || size > 25 - mineCount) return [];
+            if (layouts < 10 || !mineCount || size > this.minesBoardSize().tiles - mineCount) return [];
             const pool = hits.map((h, i) => ({ i, h }))
                 .sort((a, b) => a.h - b.h || a.i - b.i)
-                .slice(0, Math.min(12, 25 - mineCount))
+                .slice(0, Math.min(12, this.minesBoardSize().tiles - mineCount))
                 .map(t => t.i);
-            // Fair rate for k tiles all missing the mines: C(25-M,k)/C(25,k).
+            // Fair rate for k tiles all missing the mines: C(N-M,k)/C(N,k).
+            const N = this.minesBoardSize().tiles;
             let fair = 1;
-            for (let i = 0; i < size; i++) fair *= (25 - mineCount - i) / (25 - i);
+            for (let i = 0; i < size; i++) fair *= (N - mineCount - i) / (N - i);
 
+            // A big group's fair rate is tiny — ten tiles clean on a ten-mine
+            // board happens about once in a thousand rounds — so a SINGLE lucky
+            // round reads as +7000% against it and a return of 77x. Two guards:
+            // a group has to have come through clean more than once to be
+            // listed at all, and the rate is shrunk toward fair by PRIOR
+            // pseudo-rounds, so one hit in fourteen can't masquerade as an edge.
+            const PRIOR = 12;
+            const MIN_CLEAN = 2;
             const out = [];
             const combo = new Array(size);
             const walk = (start, depth) => {
@@ -1829,8 +1864,14 @@
                     for (const t of combo) mask |= (1 << t);
                     let clean = 0;
                     for (let m = 0; m < masks.length; m++) if ((masks[m] & mask) === 0) clean++;
-                    const rate = clean / masks.length;
-                    out.push({ tiles: combo.slice().sort((a, b) => a - b), rate, clean, fair, edge: fair > 0 ? (rate / fair - 1) * 100 : 0 });
+                    if (clean < MIN_CLEAN) return;
+                    const raw = clean / masks.length;
+                    const rate = (clean + fair * PRIOR) / (masks.length + PRIOR);
+                    out.push({
+                        tiles: combo.slice().sort((a, b) => a - b),
+                        rate, raw, clean, rounds: masks.length, fair,
+                        edge: fair > 0 ? (rate / fair - 1) * 100 : 0
+                    });
                     return;
                 }
                 for (let i = start; i <= pool.length - (size - depth); i++) {
@@ -1905,38 +1946,66 @@
             return half.slice(0, n).sort((a, b) => a - b);
         }
 
-        // The 25 tiles of the live board, if they can be found. Cached briefly —
-        // the board re-renders constantly during a round.
+        // The board's tiles, found by geometry rather than by DOM shape.
+        //
+        // The first attempt grouped candidates by parentElement and demanded
+        // exactly N children — which fails the moment each tile sits in its own
+        // wrapper div, and that is how the boards are actually built. Nothing
+        // was ever marked. Tiles are instead identified by what makes them a
+        // board: N elements of the SAME size, square, laid out on a regular
+        // grid. That holds whatever the markup around them looks like.
         findMinesTiles() {
             const now = Date.now();
             if (this._minesTiles && (now - this._minesTilesAt) < 3000) return this._minesTiles;
             return safe(() => {
-                const groups = new Map();
-                const nodes = document.querySelectorAll('button, [role="button"], [data-test*="tile"], [class*="tile"]');
+                const { tiles: want, cols } = this.minesBoardSize();
+                const rows = Math.round(want / cols);
+                const buckets = new Map();
+                const nodes = document.querySelectorAll('button, div, span, [role="button"], td, li, svg, canvas');
                 for (const el of nodes) {
                     if (el.closest('#geminyzer-overlay')) continue;
-                    const rect = el.getBoundingClientRect();
-                    if (rect.width < 30 || rect.height < 30) continue;
-                    if (Math.abs(rect.width - rect.height) > rect.width * 0.35) continue; // tiles are square
-                    const parent = el.parentElement;
-                    if (!parent) continue;
-                    if (!groups.has(parent)) groups.set(parent, []);
-                    groups.get(parent).push(el);
+                    const r = el.getBoundingClientRect();
+                    if (r.width < 28 || r.height < 28 || r.width > 260) continue;
+                    if (Math.abs(r.width - r.height) > r.width * 0.3) continue;   // square-ish
+                    if (el.children.length > 3) continue;                          // a tile, not a container
+                    // same-size elements land in the same bucket (2px tolerance)
+                    const key = `${Math.round(r.width / 2)}x${Math.round(r.height / 2)}`;
+                    if (!buckets.has(key)) buckets.set(key, []);
+                    buckets.get(key).push({ el, r });
                 }
-                for (const [, kids] of groups) {
-                    if (kids.length !== 25) continue;
-                    // Row-major order is what the games index by.
-                    kids.sort((a, b) => {
-                        const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
-                        return Math.abs(ra.top - rb.top) > 5 ? ra.top - rb.top : ra.left - rb.left;
-                    });
-                    this._minesTiles = kids;
+                let best = null;
+                for (const [, list] of buckets) {
+                    if (list.length < want) continue;
+                    // A board is a regular grid: `cols` distinct left positions
+                    // and `rows` distinct tops, tolerant of a pixel or two.
+                    const near = (vals, v) => vals.find(x => Math.abs(x - v) < 6);
+                    const xs = [], ys = [];
+                    for (const t of list) {
+                        if (near(xs, t.r.left) === undefined) xs.push(t.r.left);
+                        if (near(ys, t.r.top) === undefined) ys.push(t.r.top);
+                    }
+                    if (xs.length < cols || ys.length < rows) continue;
+                    // take the tightest `want` of them, closest to the centre of mass
+                    const cx = list.reduce((a, t) => a + t.r.left, 0) / list.length;
+                    const cy = list.reduce((a, t) => a + t.r.top, 0) / list.length;
+                    const picked = list
+                        .slice()
+                        .sort((a, b) => (Math.hypot(a.r.left - cx, a.r.top - cy)) - (Math.hypot(b.r.left - cx, b.r.top - cy)))
+                        .slice(0, want);
+                    if (!best || picked.length > best.length) best = picked;
+                }
+                if (!best) {
+                    this._minesTiles = null;
                     this._minesTilesAt = now;
-                    return kids;
+                    this._minesBoardFound = false;
+                    return null;
                 }
-                this._minesTiles = null;
+                // Row-major, the order the games index tiles by.
+                best.sort((a, b) => (Math.abs(a.r.top - b.r.top) > 6 ? a.r.top - b.r.top : a.r.left - b.r.left));
+                this._minesTiles = best.map(t => t.el);
                 this._minesTilesAt = now;
-                return null;
+                this._minesBoardFound = true;
+                return this._minesTiles;
             });
         }
 
@@ -2011,7 +2080,8 @@
             }
             const mineCount = this.minesCount;
             const { hits, layouts } = this.minesAnalysis();
-            const expected = layouts ? layouts * (mineCount / 25) : 0;
+            const board = this.minesBoardSize();
+            const expected = layouts ? layouts * (mineCount / board.tiles) : 0;
             const worst = Math.max(...hits, 1);
             const ranked = hits.map((h, i) => ({ i, h })).sort((a, b) => a.h - b.h || a.i - b.i);
             const ready = layouts >= 10;
@@ -2035,7 +2105,7 @@
             const picked = this.minesSelection.size;
             const cur = this.minesMultiplier(mineCount, picked);
             const next = this.minesMultiplier(mineCount, picked + 1);
-            const maxReveal = 25 - mineCount;
+            const maxReveal = this.minesBoardSize().tiles - mineCount;
             const pickLine = picked
                 ? `<span class="vx-mselk">Selected ${picked}</span>
                    <b class="vx-mselv">${this.fmtMult(cur)}</b>
@@ -2061,7 +2131,7 @@
             el.innerHTML = `
                 <div class="vx-combos-head"><span class="vx-section-title">Mine heatmap</span><span class="vx-chcount">${layouts} rounds</span></div>
                 <div class="vx-mtabs" title="Filter every panel by how many mines were on the board">${tabs}<span class="vx-mtabs-k">mines</span></div>
-                <div class="vx-mines-grid">${cells}</div>
+                <div class="vx-mines-grid" style="grid-template-columns:repeat(${board.cols}, 1fr)">${cells}</div>
                 ${rankLine}
                 ${regionLine}
                 <div class="vx-mpick">
@@ -2071,7 +2141,9 @@
                     <button class="vx-mpbtn" id="overlay-mines-clear" title="Clear the selection">Clear</button>
                 </div>
                 <div class="vx-msel">${pickLine}</div>
-                <div class="vx-mines-note">Picks are marked on the board — revealing a tile is a real bet, so that click stays yours. Layouts are drawn fresh every round: this is where mines have been, not where they'll be.</div>
+                <div class="vx-mines-note">${this._minesBoardFound === false
+                    ? 'Couldn\'t find the game board to mark — the picks above are still valid, you just have to click them yourself. '
+                    : 'Picks are marked on the board — revealing a tile is a real bet, so that click stays yours. '}Layouts are drawn fresh every round: this is where mines have been, not where they'll be.</div>
                 ${this.renderMinesClusters()}`;
 
             el.querySelectorAll('.vx-mtab').forEach(b => {
@@ -2122,15 +2194,23 @@
         }
 
         renderMinesClusters() {
-            const size = Math.min(this.minesPickSize || 3, Math.max(25 - (this.minesCount || 1) - 1, 1));
+            const size = Math.min(this.minesPickSize || 3, Math.max(this.minesBoardSize().tiles - (this.minesCount || 1) - 1, 1));
             const clusters = this.minesClusters(size);
-            if (!clusters.length) return '';
+            if (!clusters.length) {
+                // Empty because nothing cleared the sample bar, not because the
+                // panel forgot — say which, or the section just vanishes.
+                const { layouts } = this.minesAnalysis();
+                if (layouts >= 10 && this.minesCount && size <= this.minesBoardSize().tiles - this.minesCount) {
+                    return `<div class="vx-mines-note">No group of ${size} has come through clean more than once in ${layouts} rounds — nothing here worth reading yet.</div>`;
+                }
+                return '';
+            }
             const rows = clusters.map(c => {
                 const ev = c.rate * this.minesMultiplier(this.minesCount, c.tiles.length);
                 const edgeCls = c.edge > 0 ? 'good' : 'bad';
-                return `<div class="vx-mclust" data-tiles="${c.tiles.join(',')}" title="All ${c.tiles.length} came through clean in ${c.clean} of the rounds. An untouched board gives ${(c.fair * 100).toFixed(0)}%. Click to select them.">
+                return `<div class="vx-mclust" data-tiles="${c.tiles.join(',')}" title="Clean together in ${c.clean} of ${c.rounds} rounds (${(c.raw * 100).toFixed(0)}% raw). An untouched board gives ${(c.fair * 100).toFixed(2)}%. Shown rate is shrunk toward that fair rate so a lucky round doesn't read as an edge. Click to select them.">
                             <span class="vx-mctiles">${c.tiles.map(t => t + 1).join(' · ')}</span>
-                            <span class="vx-mcrate">${(c.rate * 100).toFixed(0)}%</span>
+                            <span class="vx-mcrate">${(c.rate * 100).toFixed(0)}%<i class="vx-mcn">${c.clean}/${c.rounds}</i></span>
                             <span class="vx-mcedge ${edgeCls}">${c.edge > 0 ? '+' : ''}${c.edge.toFixed(0)}%</span>
                             <span class="vx-mcev">${ev.toFixed(2)}</span>
                         </div>`;
@@ -2169,13 +2249,14 @@
             const combos = this.minesComboHistory().slice(0, 5);
             const comboRows = combos.length ? `
                 <div class="vx-mcombos">
-                    <div class="vx-mchead"><span>Tiles you revealed</span><span>best</span><span>avg</span><span>plays</span></div>
+                    <div class="vx-mchead vx-mc5"><span>Tiles you revealed</span><span>best</span><span>avg</span><span>plays</span><span title="Rounds since you last revealed this exact set. NOW means the round just played.">gap</span></div>
                     ${combos.map(c => `
-                        <div class="vx-mclust" data-tiles="${c.tiles.join(',')}" title="Click to select these tiles. ${c.paid ? `${fmtMoney(c.pl, c.cur)} over ${c.paid} paid play${c.paid === 1 ? '' : 's'}${c.mixed ? ' (mixed currencies — no total shown)' : ''}` : 'Free plays only'}. Last played ${c.lastSeen === 0 ? 'this round' : `${c.lastSeen} rounds ago`}.">
+                        <div class="vx-mclust vx-mc5" data-tiles="${c.tiles.join(',')}" title="Click to select these tiles. ${c.paid ? `${fmtMoney(c.pl, c.cur)} over ${c.paid} paid play${c.paid === 1 ? '' : 's'}${c.mixed ? ' (mixed currencies — no total shown)' : ''}` : 'Free plays only'}. Last played ${c.lastSeen === 0 ? 'this round' : `${c.lastSeen} rounds ago`}.">
                             <span class="vx-mctiles">${c.tiles.map(t => t + 1).join(' · ')}</span>
                             <span class="vx-mcrate">${this.fmtMult(c.best)}</span>
                             <span class="vx-mcedge">${c.avg.toFixed(2)}x</span>
                             <span class="vx-mcev">${c.plays}</span>
+                            <span class="vx-mcgap ${c.lastSeen === 0 ? 'now' : ''}">${c.lastSeen === 0 ? 'NOW' : c.lastSeen}</span>
                         </div>`).join('')}
                 </div>` : '';
             el.innerHTML = head + `
@@ -2196,7 +2277,7 @@
         renderMinesPayouts() {
             const mineCount = this.minesCount;
             if (!mineCount) return '';
-            const maxReveal = 25 - mineCount;
+            const maxReveal = this.minesBoardSize().tiles - mineCount;
             const open = !!this.minesPayoutsOpen;
             const head = `<div class="vx-mpayhead" id="overlay-mines-payhead" title="Every multiplier for a ${mineCount}-mine board">
                     <span class="vx-section-title">Payouts</span>
@@ -2212,8 +2293,14 @@
         }
 
         // One status-strip tile, shared by the keno and mines strips.
+        // Same markup and classes as the keno strip. It used to emit .vx-stat-k
+        // / .vx-stat-v, whose CSS went away with the strip redesign — leaving the
+        // mines strip unstyled and rendering "Games14" with no gap.
         statTile(label, value, cls = '', title = '') {
-            return `<div class="vx-stat" title="${title}"><span class="vx-stat-k">${label}</span><span class="vx-stat-v ${cls}">${value}</span></div>`;
+            const cls2 = cls === 'hot' ? 'vx-hot-txt' : cls === 'cold' ? 'vx-cold-txt' : cls === 'plneg' ? 'neg' : cls;
+            return `<div class="vx-stat-item" title="${title}">`
+                + `<span class="vx-stat-num ${cls2}">${value}</span>`
+                + `<span class="vx-stat-txt">${label.toUpperCase()}</span></div>`;
         }
 
         kenoMarkup() {
@@ -2415,6 +2502,7 @@
             `).join('');
             this.setupAltGridInteractions();
             safe(() => this.refreshSpotBadges());
+            safe(() => this.probeHandoffs());
             // Re-apply the AI gold-glow if its pick lives in this view.
             safe(() => this.updateAIRecommendation());
         }
@@ -2534,6 +2622,7 @@
             `).join('');
             this.setupStrategyInteractions();
             safe(() => this.refreshSpotBadges());
+            safe(() => this.probeHandoffs());
         }
 
         getStrategyName(id) {
@@ -2743,6 +2832,10 @@
         }
 
         getSelectMethodName(strategyId) {
+            return this.selectMethodMap()[strategyId];
+        }
+
+        selectMethodMap() {
             const map = {
                 'hot': 'selectHotNumbers',
                 'cold': 'selectColdNumbers',
@@ -2781,7 +2874,7 @@
                 'poisson': 'selectPoissonNumbers',
                 'repeat': 'selectRepeatChaserNumbers'
             };
-            return map[strategyId];
+            return map;
         }
 
         setupSideDrawerInteractions() {
@@ -3676,6 +3769,19 @@
                pointer-events: none;
            }
            .vx-spot-badge.pinned { color: #3fb950; }
+           /* a tile currently returning another strategy's ticket */
+           .vx-handoff {
+               position: absolute;
+               left: 0;
+               right: 0;
+               bottom: -2px;
+               text-align: center;
+               font-size: 8px;
+               font-weight: 700;
+               color: #d29922;
+               letter-spacing: 0.2px;
+               pointer-events: none;
+           }
            .vx-st-btn {
                flex: 1;
                background: transparent;
@@ -4062,7 +4168,6 @@
            .vx-mines-mode #enhancement-status { display: none; }
            /* two-up tiles: money and percentages need more room than a quarter
               of the panel gives them */
-           .vx-mines-mode .vx-status-strip { grid-template-columns: repeat(2, 1fr); }
            .vx-mtabs {
                display: flex;
                align-items: center;
@@ -4166,6 +4271,10 @@
            .vx-mchead, .vx-mclust {
                display: grid;
                grid-template-columns: 1fr 42px 44px 40px;
+           }
+           /* the revealed-combo table carries a gap column too */
+           .vx-mchead.vx-mc5, .vx-mclust.vx-mc5 {
+               grid-template-columns: 1fr 40px 40px 30px 34px;
                gap: 4px;
                align-items: center;
                font-variant-numeric: tabular-nums;
@@ -4191,9 +4300,13 @@
            .vx-mclust:hover { border-color: rgba(63, 185, 80, 0.45); background: #111924; }
            .vx-mctiles { color: #e6edf3; font-weight: 600; }
            .vx-mcrate { color: #3fb950; font-weight: 600; }
+           /* the sample behind the rate — a rate without it invites over-reading */
+           .vx-mcn { font-style: normal; font-size: 8px; color: #6e7681; margin-left: 3px; font-weight: 500; }
            .vx-mcedge.good { color: #3fb950; }
            .vx-mcedge.bad { color: #e5534b; }
            .vx-mcev { color: #8b949e; }
+           .vx-mcgap { color: #8b949e; font-variant-numeric: tabular-nums; }
+           .vx-mcgap.now { color: #3fb950; font-weight: 700; }
            /* payout ladder */
            .vx-mpayhead {
                display: flex;
@@ -5308,6 +5421,7 @@
                 safe(() => api?.storage?.local?.set({ spotMode: mode }));
                 this.renderSpotControl();
                 safe(() => this.refreshSpotBadges());
+            safe(() => this.probeHandoffs());
             };
             el.querySelector('#overlay-spots-auto').onclick = () => setMode('auto');
             el.querySelector('#overlay-spots-sel').onchange = (e) => {
@@ -5315,6 +5429,7 @@
                 setMode(v === '' ? 'auto' : Number(v));
             };
             safe(() => this.refreshSpotBadges());
+            safe(() => this.probeHandoffs());
         }
 
         // Show on each tile how many numbers it will fill, so a click is never
@@ -6239,13 +6354,146 @@
             const spots = this.spotsFor(strategyId);
             const getter = methodName && methodName.replace(/^select/, 'get');
             if (strategyId !== 'variance' && getter && typeof this[getter] === 'function') {
+                this.traceStrategyGetters();
+                this._trace = { depth: 0, nested: [] };
                 const nums = safe(() => this[getter](spots));
+                const trace = this._trace;
+                this._trace = null;
                 if (Array.isArray(nums) && nums.length) {
+                    this.noteStrategyHandoff(strategyId, trace, nums);
                     this.animateSequentialSelection([...nums].sort((a, b) => a - b));
                     return;
                 }
             }
             if (methodName && typeof this[methodName] === 'function') this[methodName]();
+        }
+
+        // Most strategies hand off to another one under a data threshold —
+        // `if (totalBets < 30) return this.getHotNumbers(count)` and so on, 27
+        // times across the file. That is sensible; doing it silently is not,
+        // because clicking Poisson at 18 bets gives you Hot's ticket with
+        // nothing saying so.
+        //
+        // Rather than rewrite 27 call sites, spot it from the outside: a real
+        // hand-off returns the delegate's array verbatim. Blends like Adaptive
+        // and Edge call other strategies too, but they re-rank the votes, so
+        // their result never matches any single ingredient.
+        traceStrategyGetters() {
+            if (this._tracedGetters) return;
+            this._tracedGetters = true;
+            const proto = Object.getPrototypeOf(this);
+            Object.getOwnPropertyNames(proto)
+                .filter(n => /^get[A-Z]\w*Numbers$/.test(n) && typeof proto[n] === 'function')
+                .forEach(name => {
+                    const orig = proto[name];
+                    const overlay = this;
+                    // own property shadows the prototype for this instance only
+                    this[name] = function (...args) {
+                        const t = overlay._trace;
+                        if (t) t.depth++;
+                        let out;
+                        try {
+                            out = orig.apply(this, args);
+                        } finally {
+                            if (t) {
+                                t.depth--;
+                                // depth still > 0 → this ran inside another getter
+                                if (t.depth > 0 && Array.isArray(out)) t.nested.push({ name, out });
+                            }
+                        }
+                        return out;
+                    };
+                });
+        }
+
+        // getHotNumbers -> 'hot', getSectorRotationNumbers -> 'sector'…
+        strategyIdForGetter(getterName) {
+            const stripped = getterName.replace(/^get/, '').replace(/Numbers$/, '');
+            const map = safe(() => this.selectMethodMap()) || {};
+            for (const id in map) {
+                if (map[id] === 'select' + stripped + 'Numbers') return id;
+            }
+            return stripped.toLowerCase();
+        }
+
+        noteStrategyHandoff(strategyId, trace, result) {
+            safe(() => {
+                const same = (a, b) => Array.isArray(a) && a.length === b.length && a.every((v, i) => v === b[i]);
+                const hit = (trace?.nested || []).find(x => same(x.out, result));
+                const delegateId = hit ? this.strategyIdForGetter(hit.name) : null;
+                this._handoffs = this._handoffs || {};
+                if (delegateId && delegateId !== strategyId) this._handoffs[strategyId] = delegateId;
+                else delete this._handoffs[strategyId];
+                if (!this._probing) this.refreshHandoffMarks();
+            });
+        }
+
+        // Work out which tiles are handing off WITHOUT waiting for a click, so a
+        // thin session shows what isn't ready yet up front. Only worth doing
+        // while the data is thin — that's both when hand-offs happen and when
+        // running every strategy is cheap.
+        probeHandoffs() {
+            safe(() => {
+                const bets = this.data.kenoStats.totalBets || 0;
+                if (bets > 80) {                       // past every threshold in the file
+                    if (this._handoffs && Object.keys(this._handoffs).length) {
+                        this._handoffs = {};
+                        this.refreshHandoffMarks();
+                    }
+                    return;
+                }
+                // Already worked out for this bet count — but the grid may have
+                // been rebuilt since (it renders asynchronously after the saved
+                // order loads), so repaint rather than returning empty-handed.
+                if (this._probedAt === bets) { this.refreshHandoffMarks(); return; }
+                this._probedAt = bets;
+                this.traceStrategyGetters();
+                const map = this.selectMethodMap();
+                this._probing = true;                  // paint once at the end, not 35 times
+                Object.keys(map).forEach(id => {
+                    const getter = map[id].replace(/^select/, 'get');
+                    if (typeof this[getter] !== 'function') return;
+                    this._trace = { depth: 0, nested: [] };
+                    const nums = safe(() => this[getter](this.spotsFor(id)));
+                    const trace = this._trace;
+                    this._trace = null;
+                    if (Array.isArray(nums) && nums.length) this.noteStrategyHandoff(id, trace, nums);
+                });
+                this._probing = false;
+                this.refreshHandoffMarks();
+            });
+        }
+
+        // Mark a tile that is currently returning someone else's ticket.
+        refreshHandoffMarks() {
+            const marks = this._handoffs || {};
+            const items = [
+                ...(this.overlay?.querySelectorAll('.action-item') || []),
+                ...document.querySelectorAll('#overlay-side-actions .action-item')
+            ];
+            items.forEach(item => {
+                const id = item.dataset.strategyId;
+                if (!id) return;
+                const to = marks[id];
+                let mark = item.querySelector('.vx-handoff');
+                if (!to) {
+                    if (mark) mark.remove();
+                    if (item.dataset.handoffTitle) {
+                        item.title = '';
+                        delete item.dataset.handoffTitle;
+                    }
+                    return;
+                }
+                const toName = this.getStrategyName(to) || to;
+                if (!mark) {
+                    mark = document.createElement('span');
+                    mark.className = 'vx-handoff';
+                    item.appendChild(mark);
+                }
+                mark.textContent = `→ ${toName}`;
+                item.title = `${this.getStrategyName(id) || id} doesn't have enough data yet — this is ${toName}'s pick.`;
+                item.dataset.handoffTitle = '1';
+            });
         }
 
         // Names the strategies Adaptive is currently blending, on its own tile.
