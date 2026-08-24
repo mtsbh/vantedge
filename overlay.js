@@ -33,6 +33,35 @@
     // blue edge below. `ratio` is observed/expected; maxAbove/maxBelow are the
     // observed spread either side of 1, so the tint scales to the data instead
     // of washing out once counts converge.
+    // Strategy ids that have been renamed or retired over the extension's life.
+    // Legend history and per-strategy performance are keyed by whatever id was
+    // current when the bet was placed, so without this a real export loses 7% of
+    // its hits to names nothing answers to any more — and Adaptive, which now
+    // weights strategies by hits per game played, can never match them to a play
+    // count. Renames map to their successor; strategies that were removed
+    // outright map to null and are dropped rather than misattributed.
+    const STRATEGY_ALIASES = {
+        cohesion: 'sector',        // Cohesion became Sector Rotation
+        timeseries: 'drought',     // Forecast became Drought Rebound
+        condbonus: 'realised',     // Pulse became Realised Return
+        comboways: 'anticluster',  // Cluster became Anti-Cluster
+        gapextremes: 'repeat',     // Extreme became Repeat Chaser
+        gap: 'overdue',            // early name for the gap read
+        zonehot: 'hotzone',
+        volchase: 'volatility',
+        surge: 'momentum',
+        bounce: 'streak',
+        temporal: 'ema',
+        predict: 'smart',
+        // removed with no successor — counted, but not credited to anyone
+        ensemble: null, mix: null, kelly: null, spectral: null, manual: null
+    };
+    function canonicalStrategyId(id) {
+        if (!id) return null;
+        if (Object.prototype.hasOwnProperty.call(STRATEGY_ALIASES, id)) return STRATEGY_ALIASES[id];
+        return id;
+    }
+
     // What each strategy is worth playing at when the spot control is on Auto.
     // A gap read is strongest on its few most extreme numbers; a coverage read
     // is about spread and wants a wide ticket; the frequency reads sit in the
@@ -95,7 +124,6 @@
             this.dragStart = { x: 0, y: 0 };
             this.position = { x: 20, y: 100 };
             this.stakeKenoButtons = [];
-            this.correlationData = null;
             this.mutationObserver = null;
             this.cachedButtons = null;
             this.lastCacheTime = 0;
@@ -600,7 +628,6 @@
             if (!this.lastUiUpdateTime || (now - this.lastUiUpdateTime) >= 2000) {
                 this.renderInsights();
                 this.updateAIRecommendation();
-                this.fetchAndDisplayCorrelations();
                 this.lastUiUpdateTime = now;
             }
         }
@@ -1540,37 +1567,6 @@
             if (numsEl) numsEl.onclick = () => {
                 if (activeNums.length) this.applyCombo(activeNums);
             };
-        }
-
-        fetchAndDisplayCorrelations() {
-            // Throttle correlation analysis - it's expensive and not needed on every bet
-            const now = Date.now();
-            if (this.lastCorrelationFetch && (now - this.lastCorrelationFetch) < 5000) {
-                return; // Skip if we fetched in the last 5 seconds
-            }
-            this.lastCorrelationFetch = now;
-
-            const siteKey = `${this.storageOrigin}-keno-session`;
-            const results = this.cachedKenoResults?.[siteKey] || [];
-
-            if (results.length < 10) {
-                this.correlationData = null;
-                return;
-            }
-            const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
-            if (browserAPI && browserAPI.runtime && browserAPI.runtime.sendMessage) {
-                const origin = this.storageOrigin;
-                browserAPI.runtime.sendMessage({ type: 'ANALYZE_CORRELATIONS', origin: origin }, (response) => {
-                    if (browserAPI.runtime.lastError) {
-                        // Service worker might be inactive - silently skip (won't break overlay)
-                        this.correlationData = null;
-                        return;
-                    }
-                    if (response && response.result) {
-                        this.correlationData = response.result;
-                    }
-                });
-            }
         }
 
         getSiteBadgeText() {
@@ -3769,17 +3765,25 @@
                pointer-events: none;
            }
            .vx-spot-badge.pinned { color: #3fb950; }
-           /* a tile currently returning another strategy's ticket */
-           .vx-handoff {
+           /* A tile currently returning another strategy's ticket. This used to
+              print "-> Name" absolutely at bottom:-2px, which landed straight on
+              top of .action-label. It is a state of the tile, not a third line
+              of text: dim it and put an amber dot in the free corner, with the
+              full sentence on the tile's title. */
+           .vx-borrowed .action-btn-lg {
+               opacity: 0.5;
+               border-style: dashed;
+           }
+           .vx-borrowed .action-label { opacity: 0.6; }
+           .vx-borrowed::before {
+               content: '';
                position: absolute;
-               left: 0;
-               right: 0;
-               bottom: -2px;
-               text-align: center;
-               font-size: 8px;
-               font-weight: 700;
-               color: #d29922;
-               letter-spacing: 0.2px;
+               top: 3px;
+               left: 4px;
+               width: 4px;
+               height: 4px;
+               border-radius: 50%;
+               background: #d29922;
                pointer-events: none;
            }
            .vx-st-btn {
@@ -5448,8 +5452,13 @@
                     badge.className = 'vx-spot-badge';
                     item.appendChild(badge);
                 }
-                badge.textContent = this.spotsFor(id);
-                badge.classList.toggle('pinned', this.spotMode !== 'auto');
+                // On a pin the header already reads "N SPOTS", so repeating N on
+                // all 16 tiles is noise. On Auto only the strategies that differ
+                // from the default say anything the header doesn't.
+                const n = this.spotsFor(id);
+                const show = this.spotMode === 'auto' && n !== SPOTS_DEFAULT;
+                badge.textContent = show ? n : '';
+                badge.classList.toggle('pinned', false);
             });
         }
 
@@ -5831,17 +5840,27 @@
                 }
             });
 
-            if (this.correlationData) {
-                [2, 3].forEach(size => {
-                    const C = this.correlationData.correlations?.[size] || {};
-                    const S = this.correlationData.betsSinceDrop?.[size] || {};
-                    Object.entries(C).forEach(([combo, c]) => {
-                        if ((S[combo] || 999) < 5 && c > 2) {
-                            combo.split('-').forEach(n => recentNumbers.add(parseInt(n)));
+            // Pairs that both repeat AND landed together recently count as part
+            // of the current pattern, so Anti-Pattern avoids them too. Built from
+            // getRecentDraws here rather than the service worker's correlation
+            // round-trip: that message may never land, and the strategy quietly
+            // returned different numbers depending on whether it had — the same
+            // dependency that made Wheeling behave as Hot.
+            const pairs = this.pairCounts(150);
+            const recentDraws = this.getRecentDraws(5);
+            const recentlyTogether = new Set();
+            for (const d of recentDraws) {
+                const u = [...new Set(d)].filter(n => n >= 1 && n <= this.numberCount).sort((a, b) => a - b);
+                for (let i = 0; i < u.length; i++) {
+                    for (let j = i + 1; j < u.length; j++) {
+                        if ((pairs[`${u[i]}-${u[j]}`] || 0) > 2) {
+                            recentlyTogether.add(u[i]);
+                            recentlyTogether.add(u[j]);
                         }
-                    });
-                });
+                    }
+                }
             }
+            recentlyTogether.forEach(n => recentNumbers.add(n));
 
             const antiNumbers = Array.from({ length: this.numberCount }, (_, i) => i + 1)
                 .filter(n => !recentNumbers.has(n));
@@ -6478,6 +6497,7 @@
                 let mark = item.querySelector('.vx-handoff');
                 if (!to) {
                     if (mark) mark.remove();
+                    item.classList.remove('vx-borrowed');
                     if (item.dataset.handoffTitle) {
                         item.title = '';
                         delete item.dataset.handoffTitle;
@@ -6485,15 +6505,26 @@
                     return;
                 }
                 const toName = this.getStrategyName(to) || to;
-                if (!mark) {
-                    mark = document.createElement('span');
-                    mark.className = 'vx-handoff';
-                    item.appendChild(mark);
-                }
-                mark.textContent = `→ ${toName}`;
+                if (mark) mark.remove();          // legacy text mark, if present
+                item.classList.add('vx-borrowed');
                 item.title = `${this.getStrategyName(id) || id} doesn't have enough data yet — this is ${toName}'s pick.`;
                 item.dataset.handoffTitle = '1';
             });
+        }
+
+        // Re-key a by-strategy map onto today's ids, merging what a rename split
+        // in two. `merge` combines two values for the same target id; the default
+        // adds numbers, which is what the legend hit counts need.
+        foldStrategyAliases(map, merge) {
+            const out = {};
+            if (!map) return out;
+            const add = merge || ((a, b) => (a || 0) + (b || 0));
+            for (const id in map) {
+                const key = canonicalStrategyId(id);
+                if (!key) continue;              // retired with no successor
+                out[key] = key in out ? add(out[key], map[id]) : map[id];
+            }
+            return out;
         }
 
         // Names the strategies Adaptive is currently blending, on its own tile.
@@ -6570,8 +6601,13 @@
 
             // Build legend-based strategy bias: strategies with more big hits get a weight bonus
             const siteKey = `${this.storageOrigin}-keno-session`;
-            const legendHits = this.data.legendStats?.[siteKey]?.hitsByStrategy || {};
-            const perf = this.data.kenoStrategyPerformance?.[siteKey] || {};
+            const legendHits = this.foldStrategyAliases(this.data.legendStats?.[siteKey]?.hitsByStrategy);
+            const perf = this.foldStrategyAliases(this.data.kenoStrategyPerformance?.[siteKey], (a, b) => ({
+                totalGames: (a?.totalGames || 0) + (b?.totalGames || 0),
+                wins: (a?.wins || 0) + (b?.wins || 0),
+                totalMultiplier: (a?.totalMultiplier || 0) + (b?.totalMultiplier || 0),
+                maxMultiplier: Math.max(a?.maxMultiplier || 0, b?.maxMultiplier || 0)
+            }));
             // Big-hit counts alone measure how often you CLICKED a strategy, not
             // how it performed — in a real export the top scorer was Random, with
             // 47 of 389 hits, purely because it got played most. Divide by the
