@@ -63,15 +63,52 @@
     }
 
     // What each strategy is worth playing at when the spot control is on Auto.
-    // A gap read is strongest on its few most extreme numbers; a coverage read
-    // is about spread and wants a wide ticket; the frequency reads sit in the
-    // 4-6 band where hit frequency and payout balance out. Anything not listed
-    // uses SPOTS_DEFAULT.
+    //
+    // These used to be assigned by feel. They are now measured. Method: replay a
+    // long session game by game, ask each strategy for its top 10 and record
+    // which of those ten were drawn, so we get its hit rate at every rank of its
+    // OWN ranking. Feed that rate curve through the exact Fisher noncentral
+    // hypergeometric for a 10-from-40 draw and Stake's High-risk pay table, and
+    // take the spot count with the best expected value. The draw is sampled
+    // sequentially with weights, so the distribution is Wallenius noncentral
+    // hypergeometric, NOT Fisher: Fisher understates EV by up to 19% under lift
+    // and picks a different spot count at weak lift. Values below come from
+    // simulating the real process, and only where it beats a plain 6 by more
+    // than ~3% — below that the difference is inside the noise and not worth a
+    // special case (EMA measures k=3 but gains 0.1%, so it keeps the default).
+    //
+    // What the rate curve says is where a strategy keeps its conviction:
+    //   - falling (Progressive 0.320 at rank 2 -> 0.268 by rank 10, Wheeling,
+    //     Bayesian, Portfolio) — it is sure about a few numbers and padding after
+    //     that, so play few spots.
+    //   - rising (Overdue 0.251 -> 0.277, Regression 0.221 -> 0.301) — its top
+    //     pick is its worst and it only works in aggregate, so play many.
+    //   - flat (Hot, Coverage, Adaptive, EMA) — the signal is spread evenly and
+    //     the count barely matters; sit mid-table.
+    // Several of the old hand-picked values were backwards: Overdue was 4 and
+    // measures 9, Portfolio was 8 and measures 3, Hotzone was 6 and measures 9.
+    //
+    // IMPORTANT — what this is not. On a fair board the expected value is 0.990
+    // at every spot count from 1 to 10, identical to three decimals, because each
+    // row of the pay table is built to the same 99% RTP. Stake keno is provably
+    // fair, so none of this buys an edge, and no spot count is worth more than
+    // another there. The rate curves above were measured on a deliberately biased
+    // board, which is what makes them a property of the STRATEGY (where in its
+    // own ranking it concentrates its picks) rather than of any real board. The
+    // strategies whose curve stayed flat at 0.25 even against a real bias —
+    // Cold, Variance, Transition, Anti-Pattern, Poisson, Anti-Cluster, Balanced,
+    // Random — have no measurable concentration, so they keep the default.
     const SPOTS_DEFAULT = 6;
     const STRATEGY_SPOTS = {
-        overdue: 4, repeat: 4, drought: 4, streak: 4, volatility: 4,
-        wheeling: 5, anticluster: 8, coverage: 8, portfolio: 8, balanced: 8,
-        sector: 6, hotzone: 6, positional: 6, digitbias: 6, parity: 6
+        // top-heavy: the rate collapses after the first few picks
+        wheeling: 3, bayesian: 3, volatility: 3, portfolio: 3,
+        delta: 1,
+        progressive: 4, realised: 4, drought: 4, positional: 4,
+        // rising: the rate climbs with breadth, so the ticket needs it
+        overdue: 10, hotzone: 8, regression: 8,
+        // mild tilt off the default
+        regime: 7, sector: 7, momentum: 7
+        // everything else measured flat enough that 6 is as good as anything
     };
 
     const HEAT = {
@@ -1956,6 +1993,26 @@
             return safe(() => {
                 const { tiles: want, cols } = this.minesBoardSize();
                 const rows = Math.round(want / cols);
+                const accept = (els) => {
+                    this._minesTiles = els;
+                    this._minesTilesAt = now;
+                    this._minesBoardFound = true;
+                    return els;
+                };
+
+                // 1. Stake labels every tile `data-testid="game-tile-N"`. When the
+                //    game names its own board, trust that over any geometry guess —
+                //    guessing by shape can lock onto the site's left nav, which is
+                //    also a run of equal-sized squares on a regular grid.
+                const tagged = Array.from(document.querySelectorAll('[data-testid^="game-tile-"]'))
+                    .filter(el => !el.closest('#geminyzer-overlay'))
+                    .map(el => ({ el, i: parseInt((String(el.dataset.testid).match(/(\d+)$/) || [])[1], 10) }))
+                    .filter(x => Number.isFinite(x.i))
+                    .sort((a, b) => a.i - b.i);
+                if (tagged.length >= want) return accept(tagged.slice(0, want).map(x => x.el));
+
+                // 2. Other sites don't tag their tiles, so fall back to shape: a
+                //    block of equal-sized squares sitting on a regular grid.
                 const buckets = new Map();
                 const nodes = document.querySelectorAll('button, div, span, [role="button"], td, li, svg, canvas');
                 for (const el of nodes) {
@@ -1964,30 +2021,34 @@
                     if (r.width < 28 || r.height < 28 || r.width > 260) continue;
                     if (Math.abs(r.width - r.height) > r.width * 0.3) continue;   // square-ish
                     if (el.children.length > 3) continue;                          // a tile, not a container
-                    // same-size elements land in the same bucket (2px tolerance)
                     const key = `${Math.round(r.width / 2)}x${Math.round(r.height / 2)}`;
                     if (!buckets.has(key)) buckets.set(key, []);
                     buckets.get(key).push({ el, r });
                 }
-                let best = null;
-                for (const [, list] of buckets) {
-                    if (list.length < want) continue;
-                    // A board is a regular grid: `cols` distinct left positions
-                    // and `rows` distinct tops, tolerant of a pixel or two.
+                // Does this exact set of `want` tiles form a rows x cols grid?
+                const isGrid = (picked) => {
+                    if (picked.length !== want) return false;
                     const near = (vals, v) => vals.find(x => Math.abs(x - v) < 6);
                     const xs = [], ys = [];
-                    for (const t of list) {
+                    for (const t of picked) {
                         if (near(xs, t.r.left) === undefined) xs.push(t.r.left);
                         if (near(ys, t.r.top) === undefined) ys.push(t.r.top);
                     }
-                    if (xs.length < cols || ys.length < rows) continue;
-                    // take the tightest `want` of them, closest to the centre of mass
+                    return xs.length === cols && ys.length === rows;
+                };
+                let best = null;
+                for (const [, list] of buckets) {
+                    if (list.length < want) continue;
                     const cx = list.reduce((a, t) => a + t.r.left, 0) / list.length;
                     const cy = list.reduce((a, t) => a + t.r.top, 0) / list.length;
-                    const picked = list
-                        .slice()
-                        .sort((a, b) => (Math.hypot(a.r.left - cx, a.r.top - cy)) - (Math.hypot(b.r.left - cx, b.r.top - cy)))
+                    const picked = list.slice()
+                        .sort((a, b) => Math.hypot(a.r.left - cx, a.r.top - cy) - Math.hypot(b.r.left - cx, b.r.top - cy))
                         .slice(0, want);
+                    // Validate the tiles actually taken, not the bucket they came
+                    // from. The old check passed as long as the BUCKET spanned
+                    // enough rows and columns, so a bucket holding the board plus
+                    // unrelated squares could hand back a set that was never a grid.
+                    if (!isGrid(picked)) continue;
                     if (!best || picked.length > best.length) best = picked;
                 }
                 if (!best) {
@@ -1996,12 +2057,8 @@
                     this._minesBoardFound = false;
                     return null;
                 }
-                // Row-major, the order the games index tiles by.
                 best.sort((a, b) => (Math.abs(a.r.top - b.r.top) > 6 ? a.r.top - b.r.top : a.r.left - b.r.left));
-                this._minesTiles = best.map(t => t.el);
-                this._minesTilesAt = now;
-                this._minesBoardFound = true;
-                return this._minesTiles;
+                return accept(best.map(t => t.el));
             });
         }
 
@@ -6455,14 +6512,40 @@
             return stripped.toLowerCase();
         }
 
+        // Strategies that legitimately compose others — saying "this is Hot's
+        // pick" about a declared blend is noise, and Adaptive already names what
+        // it is blending on its own tile.
+        static get BLENDS() { return ['adaptive', 'edge', 'regime']; }
+
         noteStrategyHandoff(strategyId, trace, result) {
             safe(() => {
-                const same = (a, b) => Array.isArray(a) && a.length === b.length && a.every((v, i) => v === b[i]);
-                const hit = (trace?.nested || []).find(x => same(x.out, result));
-                const delegateId = hit ? this.strategyIdForGetter(hit.name) : null;
                 this._handoffs = this._handoffs || {};
-                if (delegateId && delegateId !== strategyId) this._handoffs[strategyId] = delegateId;
-                else delete this._handoffs[strategyId];
+                const clear = () => { delete this._handoffs[strategyId]; };
+                if (!Array.isArray(result) || !result.length) return clear();
+                if (GeminyzerOverlay.BLENDS.includes(strategyId)) return clear();
+
+                // A gated strategy rarely returns a filler's list verbatim — it
+                // returns its own few picks with the rest topped up from Hot. On
+                // random interval data Regression's r^2 > 0.25 gate clears a
+                // median of ONE number, so nine of ten are Hot's and the ticket
+                // looked entirely like Regression's own work. Equality also
+                // misses a prefix: Delta at one spot returns getHotNumbers(3)[0],
+                // which is Hot's top pick but not Hot's array.
+                //
+                // So measure how much of the result the filler actually supplied,
+                // and treat a clear majority as a hand-off.
+                let best = null;
+                for (const call of (trace?.nested || [])) {
+                    const id = this.strategyIdForGetter(call.name);
+                    if (!id || id === strategyId) continue;
+                    if (!Array.isArray(call.out) || !call.out.length) continue;
+                    const from = new Set(call.out);
+                    const n = result.reduce((a, v) => a + (from.has(v) ? 1 : 0), 0);
+                    const frac = n / result.length;
+                    if (frac >= 0.6 && (!best || frac > best.frac)) best = { id, frac, n };
+                }
+                if (best) this._handoffs[strategyId] = { to: best.id, n: best.n, of: result.length };
+                else clear();
                 if (!this._probing) this.refreshHandoffMarks();
             });
         }
@@ -6536,10 +6619,14 @@
                     }
                     return;
                 }
-                const toName = this.getStrategyName(to) || to;
+                const rec = (to && typeof to === 'object') ? to : { to, n: 0, of: 0 };
+                const toName = this.getStrategyName(rec.to) || rec.to;
+                const myName = this.getStrategyName(id) || id;
                 if (mark) mark.remove();          // legacy text mark, if present
                 item.classList.add('vx-borrowed');
-                item.title = `${this.getStrategyName(id) || id} doesn't have enough data yet — this is ${toName}'s pick.`;
+                item.title = (rec.n && rec.n < rec.of)
+                    ? `${myName} only found ${rec.of - rec.n} of ${rec.of} numbers itself — the other ${rec.n} are ${toName}'s.`
+                    : `${myName} doesn't have enough data yet — this is ${toName}'s pick.`;
                 item.dataset.handoffTitle = '1';
             });
         }
