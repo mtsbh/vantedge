@@ -2454,22 +2454,43 @@
                 return;
             }
 
+            // Membership is measured, not chosen. Two numbers decide it, both taken
+            // by replaying ~600 games and running every strategy at each step:
+            //
+            //   autonomy — how often the tile returns its OWN numbers rather than
+            //     padding from Hot through its fallback. Measured on a fair board,
+            //     which is what a player actually sees.
+            //   own signal — hit rate on just those autonomous steps, against a
+            //     board with a real bias planted in it. A strategy that cannot
+            //     beat 0.25 when the bias genuinely exists cannot beat it anywhere.
+            //
+            // Promoted from Alternative, all at 100% autonomy with a real signal
+            // that was sitting behind a toggle: Coverage (z +7.5), Repeat (+5.6),
+            // Portfolio (+4.7), Wheeling (+4.3).
+            //
+            // Demoted: Parity is autonomous 0% of the time on a fair board — the
+            // tile is Hot — and Overdue only 24%. Smart (z +0.5) and Entropy
+            // (+1.3) are their own work but showed no signal against a real bias.
+            //
+            // Cold and Variance stay despite negative z. They are contrarian by
+            // construction, so underperforming against a planted bias is them
+            // working, not failing.
             const defaultPortfolio = [
-                // Row 1 - Core
+                // Row 1 - Core frequency
                 { id: 'hot', name: 'Hot' },
                 { id: 'cold', name: 'Cold' },
                 { id: 'ema', name: 'EMA' },
-                { id: 'smart', name: 'Smart' },
+                { id: 'coverage', name: 'Coverage' },
 
                 // Row 2 - Momentum
-                { id: 'overdue', name: 'Overdue' },
-                { id: 'parity', name: 'Parity' },
                 { id: 'progressive', name: 'Progressive' },
+                { id: 'repeat', name: 'Repeat' },
                 { id: 'streak', name: 'Streak' },
+                { id: 'wheeling', name: 'Wheeling' },
 
                 // Row 3 - Precision & Meta
                 { id: 'sector', name: 'Sector' },
-                { id: 'entropy', name: 'Entropy' },
+                { id: 'portfolio', name: 'Portfolio' },
                 { id: 'digitbias', name: 'Digit' },
                 { id: 'positional', name: 'Positional' },
 
@@ -2575,8 +2596,12 @@
                     // A finished drag fires a click on the source tile — ignore it.
                     if (this._suppressClick) { this._suppressClick = false; return; }
                     this.setActiveButton(id);
-                    const method = this.getSelectMethodName(id);
-                    if (method && typeof this[method] === 'function') this[method]();
+                    // Go through runStrategy like the Core grid does. Calling the
+                    // select* method directly skipped the spot count entirely —
+                    // every Alternative tile fell back to the getter's default of
+                    // 9, ignoring both Auto and a pin — and skipped the hand-off
+                    // check, so an Alt tile never showed that it was borrowing.
+                    this.runStrategy(id, this.getSelectMethodName(id));
                     const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
                     browserAPI?.runtime?.sendMessage?.({ type: 'SET_ACTIVE_STRATEGY', strategy: id, origin: this.storageOrigin })?.catch?.(() => {});
                 });
@@ -2768,22 +2793,24 @@
 
         // TAG: SIDE-DRAWER
         SIDE_DRAWER_DEFAULTS = [
-            { id: 'hotzone', name: 'Hotzone' },
-            { id: 'edge', name: 'Edge' },
             { id: 'adaptive', name: 'Adaptive' },
-            { id: 'delta', name: 'Delta' },
-            { id: 'regression', name: 'Regression' },
-            { id: 'portfolio', name: 'Portfolio' },
-            { id: 'anticluster', name: 'Anti-Cluster' },
-            { id: 'realised', name: 'Realised' },
-            { id: 'bayesian', name: 'Bayesian' },
-            { id: 'coverage', name: 'Coverage' },
-            { id: 'wheeling', name: 'Wheeling' },
-            { id: 'drought', name: 'Drought' },
-            { id: 'balanced', name: 'Balanced' },
+            { id: 'edge', name: 'Edge' },
             { id: 'momentum', name: 'Momentum' },
+            { id: 'smart', name: 'Smart' },
+            { id: 'overdue', name: 'Overdue' },
+            { id: 'parity', name: 'Parity' },
+            { id: 'entropy', name: 'Entropy' },
+            { id: 'hotzone', name: 'Hotzone' },
+            { id: 'bayesian', name: 'Bayesian' },
+            { id: 'volatility', name: 'Volatility' },
+            { id: 'drought', name: 'Drought' },
+            { id: 'realised', name: 'Realised' },
+            { id: 'anticluster', name: 'Anti-Cluster' },
+            { id: 'balanced', name: 'Balanced' },
             { id: 'poisson', name: 'Poisson' },
-            { id: 'repeat', name: 'Repeat' }
+            { id: 'transition', name: 'Transition' },
+            { id: 'delta', name: 'Delta' },
+            { id: 'regression', name: 'Regression' }
         ];
 
         populateSideDrawer() {
