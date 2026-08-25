@@ -15,7 +15,7 @@ It records every draw, builds a live heatmap, and runs 32 statistical strategies
 [![Version](https://img.shields.io/badge/version-3.26-blue)](#)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#license)
 
-![Vantedge](docs/screenshots/win-500x.png)
+![VantEdge running on Stake Keno — 400x hit with the analytics sidebar docked alongside the board](docs/screenshots/stake1.png)
 
 </div>
 
@@ -53,12 +53,24 @@ Stake (`.com / .us / .games / .bet`) · Rainbet · Roobet · Shuffle · BetFury 
 
 ## 📸 Screenshots
 
-<p align="center">
-  <a href="docs/screenshots/overlay.png"><img src="docs/screenshots/overlay.png" height="220" alt="Sidebar & heatmap"></a>
-  &nbsp;
-  <a href="docs/screenshots/popup-stats.png"><img src="docs/screenshots/popup-stats.png" height="220" alt="Dashboard"></a>
-</p>
-<p align="center"><sub><i>Sidebar &amp; heatmap · Dashboard popup (Legend Stats, Mines, backups)</i></sub></p>
+<table>
+<tr>
+<td width="50%"><a href="docs/screenshots/stake1.png"><img src="docs/screenshots/stake1.png" alt="Stake Keno — 400x hit, sidebar docked beside the board"></a></td>
+<td width="50%"><a href="docs/screenshots/stake2.png"><img src="docs/screenshots/stake2.png" alt="Stake Keno — 500x hit early in a session"></a></td>
+</tr>
+<tr>
+<td><b>Stake</b> — a 400× hit at 483 bets. The sidebar is docked beside the board, not over it: status strip, heatmap, the Core strategy grid, Smart Picker and Hot Groups all in one column.</td>
+<td><b>Stake</b> — a 500× hit only 20 bets in. Note the heatmap counts are still single digits; this is what the panel looks like before the timing strategies have enough data.</td>
+</tr>
+<tr>
+<td width="50%"><a href="docs/screenshots/rainbet1.png"><img src="docs/screenshots/rainbet1.png" alt="Rainbet Keno — 500x hit"></a></td>
+<td width="50%"><a href="docs/screenshots/rainbet2.png"><img src="docs/screenshots/rainbet2.png" alt="Rainbet Keno — 400x hit on a 4,000-bet session"></a></td>
+</tr>
+<tr>
+<td><b>Rainbet</b> — a 500× hit at 467 bets. Same panel, different host: the overlay tracks statistics per site, so each casino keeps its own history and heatmap.</td>
+<td><b>Rainbet</b> — a 400× hit on a <b>4,056-bet</b> session. Long sessions stay responsive; the heavier panels compute on demand rather than on every draw.</td>
+</tr>
+</table>
 
 ---
 
