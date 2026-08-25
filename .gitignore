@@ -11,3 +11,8 @@ vantedge-legend-stats-*.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Local README backups — the real history is in git
+# (git show 1130850:README.md recovers the pre-rewrite copy)
+README.original.backup.md
+*.backup.md
