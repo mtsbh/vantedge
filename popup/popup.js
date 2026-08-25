@@ -27,7 +27,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   let initialLoadDone = false;
   let currentKenoData = { correlations: {} };
   let currentViewingMineCount = 3;
-  let btcPrice = null;
   let heatmapUpdateInProgress = false;
   let mineCountData = {};
   let selectedNumbers = new Set();
@@ -419,25 +418,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }, 0).toString();
   }
 
-  async function getBtcPrice() {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
-
-      const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd', {
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-
-      const data = await res.json();
-      return data.bitcoin.usd;
-    } catch (error) {
-      console.warn('BTC price fetch failed:', error);
-      return null;
-    }
-  }
-
-  btcPrice = await getBtcPrice();
 
   // ======================
   // OPTIMIZED PLINKO FUNCTIONS
@@ -474,10 +454,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const pl = Number(stats.profitLoss) || 0;
     const cur = stats.currency || 'usd';
     let profitText = VantedgeMoney.fmtMoney(pl, cur);
-    // BTC is the one currency we can price, and only against USD.
-    if (btcPrice && VantedgeMoney.curKey(cur) === 'btc') {
-      profitText += ` (${VantedgeMoney.fmtMoney(pl * btcPrice, 'usd')})`;
-    }
     // Bets in other currencies ride alongside rather than being summed at an
     // invented rate.
     (stats.others || []).forEach(o => { profitText += ` · ${VantedgeMoney.fmtMoney(o.pl, o.cur)}`; });
@@ -1187,11 +1163,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const profit = Number(stats.totalProfit) || 0;
     const cur = stats.currency || 'btc'; // stats saved before the field existed
     if (elements.minesProfit) {
-      let profitText = VantedgeMoney.fmtMoney(profit, cur);
-      if (btcPrice && VantedgeMoney.curKey(cur) === 'btc') {
-        profitText += ` (${VantedgeMoney.fmtMoney(profit * btcPrice, 'usd')})`;
-      }
-      elements.minesProfit.textContent = profitText;
+      elements.minesProfit.textContent = VantedgeMoney.fmtMoney(profit, cur);
       elements.minesProfit.className = `stat-value ${profit >= 0 ? 'win' : 'loss'}`;
     }
 
