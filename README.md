@@ -63,12 +63,12 @@ Stake (`.com / .us / .games / .bet`) · Rainbet · Roobet · Shuffle · BetFury 
 <td><b>Stake</b> — a 500× hit only 20 bets in. Note the heatmap counts are still single digits; this is what the panel looks like before the timing strategies have enough data.</td>
 </tr>
 <tr>
-<td width="50%"><a href="docs/screenshots/rainbet1.png"><img src="docs/screenshots/rainbet1.png" alt="Rainbet Keno — 500x hit"></a></td>
-<td width="50%"><a href="docs/screenshots/rainbet2.png"><img src="docs/screenshots/rainbet2.png" alt="Rainbet Keno — 400x hit on a 4,000-bet session"></a></td>
+<td width="50%"><a href="docs/screenshots/rainbet1.png"><img src="docs/screenshots/rainbet1.png" alt="Rainbet Keno — the sidebar running on a second site with its own stats"></a></td>
+<td width="50%"><a href="docs/screenshots/rainbet2.png"><img src="docs/screenshots/rainbet2.png" alt="Rainbet Keno — heatmap and Hot Groups combination ranking"></a></td>
 </tr>
 <tr>
-<td><b>Rainbet</b> — a 500× hit at 467 bets. Same panel, different host: the overlay tracks statistics per site, so each casino keeps its own history and heatmap.</td>
-<td><b>Rainbet</b> — a 400× hit on a <b>4,056-bet</b> session. Long sessions stay responsive; the heavier panels compute on demand rather than on every draw.</td>
+<td><b>Rainbet</b> — the same panel on a different host. Statistics are tracked <i>per site</i>, so each casino keeps its own draw history, heatmap and P/L; nothing from one bleeds into another.</td>
+<td><b>Rainbet</b> — heat and grouping at a glance. The heatmap tints each number by observed-vs-expected rate, and <b>Hot Groups</b> below ranks the 4-number combinations that keep landing together, by hits, gap and heat.</td>
 </tr>
 </table>
 
