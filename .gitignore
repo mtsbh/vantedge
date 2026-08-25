@@ -16,3 +16,8 @@ Thumbs.db
 # (git show 1130850:README.md recovers the pre-rewrite copy)
 README.original.backup.md
 *.backup.md
+
+# Local agent/assistant instructions - not for a public repo
+AGENTS.md
+CLAUDE.md
+.claude/
