@@ -2650,7 +2650,7 @@
                 edge: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
                 portfolio: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>',
                 anticluster: '<line x1="7" y1="7" x2="16" y2="9"/><line x1="7" y1="7" x2="9" y2="16"/><line x1="16" y1="9" x2="17" y2="17"/><line x1="9" y1="16" x2="17" y2="17"/><circle cx="7" cy="7" r="2.2"/><circle cx="16" cy="9" r="2.2"/><circle cx="9" cy="16" r="2.2"/><circle cx="17" cy="17" r="2.2"/>',
-                realised: '<path d="M2 12h4l3 8 4-16 3 8h6"/>',
+                realised: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><line x1="6" y1="10" x2="6" y2="14"/><line x1="18" y1="10" x2="18" y2="14"/>',
                 bayesian: '<path d="M4 4h16"/><path d="m4 4 8 8-8 8h16"/>',
                 montecarlo: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1"/><circle cx="15.5" cy="8.5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="8.5" cy="15.5" r="1"/><circle cx="15.5" cy="15.5" r="1"/>',
                 coverage: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
