@@ -28,7 +28,7 @@ It records every draw, builds a live heatmap, and runs 32 statistical strategies
 
 - **Live heatmap** - every drawn number is tracked per‑site; hot/cold numbers light up in real time, with a per‑number **Heat Score (0–100)**, momentum arrows, and a Tiered/Gradient colour toggle.
 - **32 pick strategies** - 16 on the **Core** grid, 16 on **Alternative**, swapped in place by a toggle above the grid. Frequency, timing, spatial‑bias, statistical, correlation, and meta/blend models.
-- **Measured spot counts** - each strategy runs at the ticket size its own hit‑rate curve justifies (**Auto**), or pin every strategy to 2–10 spots. Each tile shows how many numbers it will fill, so a click is never a surprise.
+- **Ticket size control** - **Auto** gives each strategy its own size, or pin every strategy to 2–10 spots. Each tile shows how many numbers it will fill, so a click is never a surprise. This shapes variance, not expected return (see [note](#a-note-on-ticket-size)).
 - **Hand‑off marks** - when a strategy doesn't have enough data and quietly falls back to another, the tile *says so* instead of passing off Hot's ticket as its own.
 - **Payout ladder** - what your exact ticket pays at all four Stake risk levels, with RTP and standard deviation per row. The spread column is the point: risk changes the *shape* of the payout, not the edge.
 - **Smart Picker** - three independent pickers (**Pattern**, **Pairs**, **Stats**) at any size 2–10, with live best/avg multiplier, bets, gap and P/L for the set on screen.
@@ -36,7 +36,7 @@ It records every draw, builds a live heatmap, and runs 32 statistical strategies
 - **Gap alerts** - a neutral notice when a combo you're invested in crosses 0.8× or 1.5× of its expected interval.
 - **Real‑money P/L** - profit counted as `stake × (multiplier − 1)` in actual currency, not flat units, with ROI, wagered totals, and free ($0) bets excluded. One shared rule across overlay, popup, and worker.
 - **Mines panel** - now in the sidebar alongside Keno: mine heatmap, per‑mine‑count tabs, safest / random‑safe pickers, clean‑cluster table, the full payout ladder, and your revealed‑tile history.
-- **Significance‑gated models** - bias‑detection strategies use chi‑square / z‑score gates and fall back to plain frequency when no real signal is present, so you're not chasing noise.
+- **Significance‑gated models** - bias‑detection strategies apply chi‑square / z‑score gates and fall back to plain frequency when the gate does not clear. Read the [caveat](#a-note-on-the-significance-gates) on what those gates do and don't rule out.
 - **Legend Stats** - automatically logs every big multiplier hit (≥30×) with the strategy that was active, so you can see what actually works on *your* sessions.
 - **Local‑first & private** - all data lives in your browser (IndexedDB). No accounts, no telemetry. Optional GitHub Gist backup using **your own** token.
 - **Adapts to the board** - auto‑detects classic 1–40 and Rainbet's Extreme 1–56 layouts; the Mines board is found by geometry, so non‑5×5 boards work too.
@@ -116,26 +116,6 @@ Pick 1–10 numbers and the panel prints all four Stake pay tables for that exac
 Every row is built to the same **~99% RTP** (Stake Originals run a 1% house edge, not the 3% often quoted). So switching risk **does not change your edge and cannot change your odds of hitting** - it changes the shape of the payout. On a 4‑pick, High drops the 1.7× that lands 21% of the time and pays 259× instead of 100× for the full hit: same expected return, roughly **2.4× the standard deviation**.
 
 The tables were cross‑checked two ways before use - every row's hypergeometric EV lands in 98.65–99.07%, and all forty full‑hit cells match an independently sourced table. The panel hides itself on Rainbet's 56‑number Extreme mode, which pays differently.
-
----
-
-## 🎯 Spot counts (Auto)
-
-Most tools assume you always play the same number of spots. Vantedge measures it instead.
-
-Each strategy was replayed game‑by‑game over a long session, recording its hit rate at every rank of *its own* ranking. Feeding that rate curve through the **Wallenius noncentral hypergeometric** distribution (the draw is sampled sequentially with weights - using Fisher understates EV by up to 19%) gives the spot count with the best expected value:
-
-| Shape of the rate curve | Meaning | Spots |
-| --- | --- | --- |
-| **Falling** - Wheeling, Bayesian, Volatility, Portfolio | Sure about a few numbers, padding after that | 3 |
-| **Falling** - Progressive, Realised, Drought, Positional, Overdue, Digit | Concentrated, but slightly broader | 4 |
-| **Flat** - Hot, Cold, Smart, EMA, Coverage, Adaptive, Random, … | Signal spread evenly; the count barely matters | 6 *(default)* |
-| **Mild tilt** - Regime, Sector, Momentum | Slightly rewards breadth | 7 |
-| **Rising** - Hotzone | Needs the breadth to work at all | 8 |
-
-Strategies with a fallback are capped where they stay autonomous: Overdue is its own strategy 96% of the time at 4 spots but only 40% at 10, so its apparent "rising" curve was really Hot's.
-
-> **What this is not.** On a *fair* board the expected value is 0.990 at every spot count from 1 to 10, identical to three decimals, because every pay row targets the same RTP. These curves were measured against a deliberately biased board, which is what makes them a property of the **strategy** (where it concentrates its conviction) rather than of any real board. Auto picks the size that best expresses each strategy's shape - it does not manufacture an edge.
 
 ---
 
@@ -238,6 +218,48 @@ The other sixteen, reachable through the **Alternative** toggle. Four of them (R
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/poisson.svg"><img src="docs/icons/light/poisson.svg" width="20" height="20" alt=""></picture></td><td><b>Poisson</b></td><td>Survival probability</td><td>Models each gap as a Poisson process (λ = mean gap) and ranks by how improbable a gap this long would be. The most statistically grounded overdue read (30+ games)</td></tr>
 </tbody>
 </table>
+
+### A note on ticket size
+
+The **spots** control sets how many numbers a strategy fills - **Auto** gives each
+strategy its own size, or pin every strategy to 2-10.
+
+**It changes variance, not expected return.** Computed from the pay tables in this
+repo, every spot count at every risk level returns **98.65-99.07%**. What changes is
+the shape: a 3-pick on High wins once in 82 rounds (SD 8.9); a 3-pick on Classic
+wins 59% of the time (SD 1.4). Same edge, thirty-fold difference in swing.
+
+**The per-strategy Auto sizes are a labelling convention, not a measured edge.**
+They were read off where each strategy's hit rate falls across its own ranking - but
+that curve appears on a *provably fair* board too if the ranking window overlaps the
+draw being scored (3,000 simulated fair games produce a 35%-to-17% curve out of
+nothing). Distinguishing a real 5-point difference from noise here needs roughly
+3,400 games per strategy. So Auto means "this strategy expresses a concentrated
+read, so it fills fewer" - it does not earn anything.
+
+### A note on the significance gates
+
+Two strategies gate on a significance test. Both were measured against simulated
+fair boards rather than assumed, because the obvious reading of each is wrong.
+
+**Hotzone is correctly calibrated, by accident.** It scans 28 overlapping 2x2
+blocks and takes the largest z, which should inflate false positives badly - a
+maximum over 28 correlated tests is not one test. But it divides by
+`sqrt(expected)`, a Poisson standard deviation that is too large for draws made
+without replacement, which deflates every z. The two errors very nearly cancel:
+on a fair board the gate fires **3.4-4.9%** of the time, close to the nominal 5%.
+Correcting the standard deviation alone would take that to **14-17%**, so the
+apparent bug is load-bearing and should be left alone.
+
+**Positional is conservative.** Its row and column chi-square gates use the
+textbook p<0.05 critical values (9.488 at df=4, 14.067 at df=7), but the same
+without-replacement under-dispersion applies, so each fires on about **1.0-1.6%**
+of fair boards rather than 5%. It will miss real row or column bias more often
+than the thresholds suggest.
+
+Neither is a reason to distrust a pick - a conservative test is a safe way to fail,
+and Hotzone hands back to Hot when its gate does not clear. But "gated" means the
+test was run, not that a bias was verified.
 
 > **Hand‑offs are visible.** Most strategies fall back to Hot or Smart while data is thin. Rather than pretend otherwise, Vantedge traces each strategy's internal calls and marks a tile when a clear majority of its ticket came from somewhere else - so clicking Poisson at 18 bets tells you it's really Hot's pick.
 
