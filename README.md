@@ -239,26 +239,27 @@ read, so it fills fewer" - it does not earn anything.
 
 ### A note on the significance gates
 
-Several strategies gate on a significance test. Two of those gates are weaker than
-they look, and it is worth knowing which way each one errs.
+Two strategies gate on a significance test. Both were measured against simulated
+fair boards rather than assumed, because the obvious reading of each is wrong.
 
-**Hotzone scans many regions, so its gate clears on fair boards.** Scanning all 539
-contiguous blocks of the 8x5 grid and taking the largest z is a *maximum* over 539
-correlated tests, not one test. Simulated on a fair board, the expected largest |z|
-is about **2.85**, and some block clears |z| > 1.96 in **99%** of runs. Hotzone's
-threshold is 2.5, so on a provably fair board it will often believe it has found a
-hotspot. The correct treatment is a scan statistic with a simulated null (Kulldorff)
-or an FDR correction; a fixed per-block threshold is not one.
+**Hotzone is correctly calibrated, by accident.** It scans 28 overlapping 2x2
+blocks and takes the largest z, which should inflate false positives badly - a
+maximum over 28 correlated tests is not one test. But it divides by
+`sqrt(expected)`, a Poisson standard deviation that is too large for draws made
+without replacement, which deflates every z. The two errors very nearly cancel:
+on a fair board the gate fires **3.4-4.9%** of the time, close to the nominal 5%.
+Correcting the standard deviation alone would take that to **14-17%**, so the
+apparent bug is load-bearing and should be left alone.
 
-**The grid chi-square errs the other way.** Ten numbers are drawn without
-replacement, so the counts are under-dispersed against the multinomial the plain
-Pearson statistic assumes - its expectation is 30, not 39 degrees of freedom.
-Measured false-positive rate is about 0.003 rather than 0.05, so Positional is
-considerably more conservative than p<0.05 implies, and gives up power it did not
-need to.
+**Positional is conservative.** Its row and column chi-square gates use the
+textbook p<0.05 critical values (9.488 at df=4, 14.067 at df=7), but the same
+without-replacement under-dispersion applies, so each fires on about **1.0-1.6%**
+of fair boards rather than 5%. It will miss real row or column bias more often
+than the thresholds suggest.
 
-Neither of these makes a strategy useless - Hotzone still hands back to Hot, and a
-conservative test is a safe failure. But "gated" should not be read as "verified".
+Neither is a reason to distrust a pick - a conservative test is a safe way to fail,
+and Hotzone hands back to Hot when its gate does not clear. But "gated" means the
+test was run, not that a bias was verified.
 
 > **Hand‑offs are visible.** Most strategies fall back to Hot or Smart while data is thin. Rather than pretend otherwise, Vantedge traces each strategy's internal calls and marks a tile when a clear majority of its ticket came from somewhere else - so clicking Poisson at 18 bets tells you it's really Hot's pick.
 

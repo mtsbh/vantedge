@@ -6135,6 +6135,16 @@
                     for (let dr = 0; dr < H; dr++)
                         for (let dc = 0; dc < W; dc++)
                             observed += cellHit(r + dr, c + dc);
+                    // sqrt(expectedBlock) is a Poisson SD, and it is WRONG for a
+                    // 10-of-40 draw without replacement -- the true SD is smaller.
+                    // Do not "fix" it in isolation. Scanning 28 overlapping blocks
+                    // and keeping the largest z inflates false positives, and this
+                    // too-large SD deflates them by almost exactly as much. Measured
+                    // on simulated fair boards, the pair cancels: the gate below
+                    // fires on 3.4-4.9% of fair boards (nominal 5%). Substituting
+                    // the correct SD while leaving the 2.5 threshold alone takes
+                    // that to 14-17%. Either leave both, or replace the whole gate
+                    // with a scan statistic against a simulated null.
                     const z = (observed - expectedBlock) / Math.sqrt(expectedBlock || 1);
                     if (z > bestBlockZ) bestBlockZ = z;
                     for (let dr = 0; dr < H; dr++)
