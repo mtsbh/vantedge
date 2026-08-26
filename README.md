@@ -28,7 +28,7 @@ It records every draw, builds a live heatmap, and runs 32 statistical strategies
 
 - **Live heatmap** - every drawn number is tracked per‑site; hot/cold numbers light up in real time, with a per‑number **Heat Score (0–100)**, momentum arrows, and a Tiered/Gradient colour toggle.
 - **32 pick strategies** - 16 on the **Core** grid, 16 on **Alternative**, swapped in place by a toggle above the grid. Frequency, timing, spatial‑bias, statistical, correlation, and meta/blend models.
-- **Measured spot counts** - each strategy runs at the ticket size its own hit‑rate curve justifies (**Auto**), or pin every strategy to 2–10 spots. Each tile shows how many numbers it will fill, so a click is never a surprise.
+- **Ticket size control** - **Auto** gives each strategy its own size, or pin every strategy to 2–10 spots. Each tile shows how many numbers it will fill, so a click is never a surprise. This shapes variance, not expected return (see [note](#a-note-on-ticket-size)).
 - **Hand‑off marks** - when a strategy doesn't have enough data and quietly falls back to another, the tile *says so* instead of passing off Hot's ticket as its own.
 - **Payout ladder** - what your exact ticket pays at all four Stake risk levels, with RTP and standard deviation per row. The spread column is the point: risk changes the *shape* of the payout, not the edge.
 - **Smart Picker** - three independent pickers (**Pattern**, **Pairs**, **Stats**) at any size 2–10, with live best/avg multiplier, bets, gap and P/L for the set on screen.
@@ -116,26 +116,6 @@ Pick 1–10 numbers and the panel prints all four Stake pay tables for that exac
 Every row is built to the same **~99% RTP** (Stake Originals run a 1% house edge, not the 3% often quoted). So switching risk **does not change your edge and cannot change your odds of hitting** - it changes the shape of the payout. On a 4‑pick, High drops the 1.7× that lands 21% of the time and pays 259× instead of 100× for the full hit: same expected return, roughly **2.4× the standard deviation**.
 
 The tables were cross‑checked two ways before use - every row's hypergeometric EV lands in 98.65–99.07%, and all forty full‑hit cells match an independently sourced table. The panel hides itself on Rainbet's 56‑number Extreme mode, which pays differently.
-
----
-
-## 🎯 Spot counts (Auto)
-
-Most tools assume you always play the same number of spots. Vantedge measures it instead.
-
-Each strategy was replayed game‑by‑game over a long session, recording its hit rate at every rank of *its own* ranking. Feeding that rate curve through the **Wallenius noncentral hypergeometric** distribution (the draw is sampled sequentially with weights - using Fisher understates EV by up to 19%) gives the spot count with the best expected value:
-
-| Shape of the rate curve | Meaning | Spots |
-| --- | --- | --- |
-| **Falling** - Wheeling, Bayesian, Volatility, Portfolio | Sure about a few numbers, padding after that | 3 |
-| **Falling** - Progressive, Realised, Drought, Positional, Overdue, Digit | Concentrated, but slightly broader | 4 |
-| **Flat** - Hot, Cold, Smart, EMA, Coverage, Adaptive, Random, … | Signal spread evenly; the count barely matters | 6 *(default)* |
-| **Mild tilt** - Regime, Sector, Momentum | Slightly rewards breadth | 7 |
-| **Rising** - Hotzone | Needs the breadth to work at all | 8 |
-
-Strategies with a fallback are capped where they stay autonomous: Overdue is its own strategy 96% of the time at 4 spots but only 40% at 10, so its apparent "rising" curve was really Hot's.
-
-> **What this is not.** On a *fair* board the expected value is 0.990 at every spot count from 1 to 10, identical to three decimals, because every pay row targets the same RTP. These curves were measured against a deliberately biased board, which is what makes them a property of the **strategy** (where it concentrates its conviction) rather than of any real board. Auto picks the size that best expresses each strategy's shape - it does not manufacture an edge.
 
 ---
 
@@ -238,6 +218,24 @@ The other sixteen, reachable through the **Alternative** toggle. Four of them (R
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/poisson.svg"><img src="docs/icons/light/poisson.svg" width="20" height="20" alt=""></picture></td><td><b>Poisson</b></td><td>Survival probability</td><td>Models each gap as a Poisson process (λ = mean gap) and ranks by how improbable a gap this long would be. The most statistically grounded overdue read (30+ games)</td></tr>
 </tbody>
 </table>
+
+### A note on ticket size
+
+The **spots** control sets how many numbers a strategy fills - **Auto** gives each
+strategy its own size, or pin every strategy to 2-10.
+
+**It changes variance, not expected return.** Computed from the pay tables in this
+repo, every spot count at every risk level returns **98.65-99.07%**. What changes is
+the shape: a 3-pick on High wins once in 82 rounds (SD 8.9); a 3-pick on Classic
+wins 59% of the time (SD 1.4). Same edge, thirty-fold difference in swing.
+
+**The per-strategy Auto sizes are a labelling convention, not a measured edge.**
+They were read off where each strategy's hit rate falls across its own ranking - but
+that curve appears on a *provably fair* board too if the ranking window overlaps the
+draw being scored (3,000 simulated fair games produce a 35%-to-17% curve out of
+nothing). Distinguishing a real 5-point difference from noise here needs roughly
+3,400 games per strategy. So Auto means "this strategy expresses a concentrated
+read, so it fills fewer" - it does not earn anything.
 
 > **Hand‑offs are visible.** Most strategies fall back to Hot or Smart while data is thin. Rather than pretend otherwise, Vantedge traces each strategy's internal calls and marks a tile when a clear majority of its ticket came from somewhere else - so clicking Poisson at 18 bets tells you it's really Hot's pick.
 
