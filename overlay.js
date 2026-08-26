@@ -3877,8 +3877,9 @@
                    display: none !important;
                }
 
-                .low-mode { background-color: #ffcc00; color: #333; font-weight: bold; }
-                .vx-spot-badge.second { color: #ffcc00; font-weight: 700; }
+                /* No second-click marker: the spot badge already shows the number
+                   the next click will play, and the mode resets whenever you move
+                   to another tile, so there is no state to advertise. */
 
                 /* --- REGIME BUTTON COLOR --- */
                 .action-btn-lg.regime-hot {
@@ -4761,22 +4762,8 @@
         }
 
         setActiveButton(buttonId) {
-            const toggleableStrategies = ['variance'];
-            toggleableStrategies.forEach(strategyId => {
-                if (strategyId !== buttonId) {
-                    if (this.strategyToggles[strategyId] === true) {
-                        this.strategyToggles[strategyId] = false;
-
-                        const btn = this.overlay.querySelector(`.action-btn-lg[data-action="${strategyId}"]`);
-                        if (btn) {
-                            btn.classList.remove('low-mode');
-                        }
-                    }
-                }
-            });
-
-            const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
-            browserAPI.storage.local.set({ strategyToggles: this.strategyToggles });
+            // The spot-size alternation resets itself whenever the clicked tile
+            // changes (see afterStrategyRun), so there is nothing to clear here.
 
             // Clear active state in main grid AND side drawer (drawer is a body sibling)
             document.querySelectorAll('.action-btn-lg').forEach(btn => {
@@ -5753,7 +5740,11 @@
             if (this.spotMode !== 'auto') return Math.max(1, Math.min(10, Number(this.spotMode) || SPOTS_DEFAULT));
             const modes = STRATEGY_SPOTS[strategyId];
             if (!Array.isArray(modes) || !modes.length) return SPOTS_DEFAULT;
-            const second = modes.length > 1 && !!this.strategyToggles?.[strategyId];
+            // Second click only counts while you stay on the same tile. Moving to
+            // another strategy starts it fresh on its own first (larger) size.
+            const second = modes.length > 1
+                && this._spotFor === strategyId
+                && this._spotSecond === true;
             return second ? modes[1] : modes[0];
         }
 
@@ -5818,7 +5809,6 @@
                 // stopped being mostly 6s.)
                 const n = this.spotsFor(id);
                 badge.textContent = this.spotMode === 'auto' ? n : '';
-                badge.classList.toggle('second', this.spotMode === 'auto' && !!this.strategyToggles?.[id]);
                 badge.classList.toggle('pinned', false);
             });
         }
@@ -5946,13 +5936,8 @@
         selectVarianceNumbers() {
             const numbers = this.getVarianceNumbers();
             this.animateSequentialSelection(numbers);
-            const btn = this.overlay.querySelector('.action-btn-lg[data-action="variance"]');
-            if (btn) {
-                btn.classList.toggle('low-mode', !this.strategyToggles.variance);
-            }
-            this.strategyToggles.variance = !this.strategyToggles.variance;
-            const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
-            browserAPI.storage.local.set({ strategyToggles: this.strategyToggles });
+            // The mode flip lives in afterStrategyRun now, for every strategy that
+            // has two modes. Doing it here as well would flip it twice per click.
         }
 
         // --- Strategy: Entropy ---
@@ -6792,13 +6777,16 @@
         // A pin suspends the alternation entirely: with an explicit count set,
         // every click means the same thing.
         afterStrategyRun(strategyId) {
-            if (this.spotMode !== 'auto' || !this.hasSecondMode(strategyId)) return;
-            if (!this.strategyToggles) this.strategyToggles = {};
-            this.strategyToggles[strategyId] = !this.strategyToggles[strategyId];
-            const btn = this.overlay?.querySelector(`.action-btn-lg[data-action="${strategyId}"]`);
-            if (btn) btn.classList.toggle('low-mode', !!this.strategyToggles[strategyId]);
-            const api = (typeof browser !== 'undefined') ? browser : chrome;
-            safe(() => api?.storage?.local?.set({ strategyToggles: this.strategyToggles }));
+            if (this.spotMode !== 'auto' || !this.hasSecondMode(strategyId)) {
+                this._spotFor = strategyId;
+                this._spotSecond = false;
+                safe(() => this.refreshSpotBadges());
+                return;
+            }
+            // Same tile again -> alternate. A different tile -> that one is now the
+            // one being cycled, and the click just made was its first.
+            this._spotSecond = (this._spotFor === strategyId) ? !this._spotSecond : true;
+            this._spotFor = strategyId;
             safe(() => this.refreshSpotBadges());
         }
 
