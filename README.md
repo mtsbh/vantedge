@@ -251,11 +251,13 @@ on a fair board the gate fires **3.4-4.9%** of the time, close to the nominal 5%
 Correcting the standard deviation alone would take that to **14-17%**, so the
 apparent bug is load-bearing and should be left alone.
 
-**Positional is conservative.** Its row and column chi-square gates use the
-textbook p<0.05 critical values (9.488 at df=4, 14.067 at df=7), but the same
-without-replacement under-dispersion applies, so each fires on about **1.0-1.6%**
-of fair boards rather than 5%. It will miss real row or column bias more often
-than the thresholds suggest.
+**Positional was firing on every board, and is now fixed.** Its row and column
+chi-square used expected counts of `totalBets * 4` and `* 2.5`. A row is 8 numbers,
+so it expects 8 x (10/40) = 2 hits per game, and a column of 5 expects 1.25 - both
+were exactly twice the truth. At 100 games that put chi-square near 500 against a
+critical value of 9.488, so **both gates fired on 100% of fair boards**. With the
+expectations corrected the gate fires on about **2.6-2.9%**, slightly conservative
+against its nominal 5% because draws are made without replacement.
 
 Neither is a reason to distrust a pick - a conservative test is a safe way to fail,
 and Hotzone hands back to Hot when its gate does not clear. But "gated" means the
