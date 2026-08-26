@@ -3878,6 +3878,7 @@
                }
 
                 .low-mode { background-color: #ffcc00; color: #333; font-weight: bold; }
+                .vx-spot-badge.second { color: #ffcc00; font-weight: 700; }
 
                 /* --- REGIME BUTTON COLOR --- */
                 .action-btn-lg.regime-hot {
@@ -5809,11 +5810,15 @@
                     item.appendChild(badge);
                 }
                 // On a pin the header already reads "N SPOTS", so repeating N on
-                // all 16 tiles is noise. On Auto only the strategies that differ
-                // from the default say anything the header doesn't.
+                // every tile is noise. On Auto the badge always shows, because
+                // every strategy now has its own size and half of them change it
+                // on a second click -- that is exactly when the number matters.
+                // (This used to hide the badge whenever the count equalled
+                // SPOTS_DEFAULT, which made nine tiles go blank once the table
+                // stopped being mostly 6s.)
                 const n = this.spotsFor(id);
-                const show = this.spotMode === 'auto' && n !== SPOTS_DEFAULT;
-                badge.textContent = show ? n : '';
+                badge.textContent = this.spotMode === 'auto' ? n : '';
+                badge.classList.toggle('second', this.spotMode === 'auto' && !!this.strategyToggles?.[id]);
                 badge.classList.toggle('pinned', false);
             });
         }
