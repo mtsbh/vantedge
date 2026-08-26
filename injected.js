@@ -95,6 +95,24 @@
         return u.includes('rainbet.com') && u.includes('keno');
     }
 
+    // Rainbet's mines route is matched the same loose way as its keno route.
+    // Keno was pinned to /v1/games/keno/play until the path moved and capture
+    // stopped without a word; mines is still pinned to /v1/games/mines/play and
+    // would fail identically. Match the game, not the path.
+    function isRainbetMinesURL(url) {
+        if (typeof url !== 'string') return false;
+        const u = url.toLowerCase();
+        return u.includes('rainbet.com') && u.includes('mines');
+    }
+
+    // Roobet mines was never wired up at all - only keno was - so nothing here
+    // has ever been captured. Match the request so there is something to read.
+    function isRoobetMinesURL(url) {
+        if (typeof url !== 'string') return false;
+        const u = url.toLowerCase();
+        return u.includes('roobet.com') && u.includes('mines');
+    }
+
     function isWinnaKenoURL(url) {
         if (typeof url !== 'string') return false;
         const u = url.toLowerCase();
@@ -119,6 +137,8 @@
             const shouldIntercept = gameAPIEndpoints.some(endpoint => this._url.includes(endpoint)) ||
                                    isWinnaKenoURL(this._url) ||
                                    isRainbetKenoURL(this._url) ||
+                                   isRainbetMinesURL(this._url) ||
+                                   isRoobetMinesURL(this._url) ||
                                    (site.includes('betfury.com') && this._url.toLowerCase().includes('keno'));
 
             if (shouldIntercept) {
@@ -161,6 +181,8 @@
         const shouldIntercept = gameAPIEndpoints.some(endpoint => url.includes(endpoint)) ||
                                isWinnaKenoURL(url) ||
                                isRainbetKenoURL(url) ||
+                               isRainbetMinesURL(url) ||
+                               isRoobetMinesURL(url) ||
                                (site.includes('betfury.com') && url.toLowerCase().includes('keno')) ||
                                (site.includes('betfury.com') && method === 'POST');
 
@@ -238,8 +260,66 @@
         }
     }
 
+    // Roobet mines. Field names are read defensively, the same way the keno
+    // transform above reads them, because Roobet's mines payload has not been
+    // observed - only its keno one has. Whatever it calls the mine positions and
+    // the revealed tiles, one of these should land; if none do, the caller warns
+    // rather than storing an empty round.
+    // Roobet mines, from an observed cashout response:
+    //   { deck: { "0":"diamond", ... "9":"mine", "11":"mine", "17":"mine" },
+    //     bet: { betAmount, currency, mult, payoutMultiplier, profit, won,
+    //            betId, closedOut, gameName:"mines" } }
+    // Mine positions are the deck keys whose value is "mine". The earlier
+    // version of this guessed at mines/minePositions/bombs arrays; Roobet sends
+    // none of those. A per-click reveal ({ result, payoutMultiplier,
+    // provablyFairInfo.roundOver:false }) carries no deck, so it is skipped.
+    function transformRoobetMinesData(gameData) {
+        const deck = gameData.deck || gameData.bet?.deck;
+        if (!deck || typeof deck !== 'object') return null;
+        const mines = Object.keys(deck)
+            .filter(k => String(deck[k]).toLowerCase() === 'mine')
+            .map(Number)
+            .filter(n => Number.isFinite(n))
+            .sort((a, b) => a - b);
+        const bet = gameData.bet || gameData;
+        const num = v => parseFloat(v) || 0;
+        return {
+            id: bet.betId || bet.id || `mines-${Date.now()}`,
+            active: false,                       // a deck only arrives once the round ends
+            payoutMultiplier: num(bet.payoutMultiplier ?? bet.mult),
+            payout: num(bet.payoutValue ?? bet.payout),
+            amount: num(bet.betAmount ?? bet.amount),
+            currency: String(bet.currency || bet.balanceType || 'usd').toLowerCase(),
+            state: {
+                mines,
+                rounds: [],                      // Roobet does not report which tiles were opened
+                minesCount: mines.length || 3
+            },
+            timestamp: new Date().toISOString()
+        };
+    }
+
     function handleRoobetResponse(responseText, url, method, requestData) {
         try {
+            if (isRoobetMinesURL(url)) {
+                const gameData = JSON.parse(responseText);
+                const payload = gameData.data || gameData.game || gameData;
+                const transformed = payload && transformRoobetMinesData(payload);
+                if (transformed) {
+                    log('✅ Roobet Mines round finished:', transformed.state);
+                    window.postMessage({
+                        type: 'MINES_BET_DATA',
+                        data: transformed,
+                        site: site
+                    }, '*');
+                } else if (payload && payload.result === undefined) {
+                    // A reveal has `result` and no deck; that is the round still
+                    // running rather than a shape we failed to read.
+                    warn('Roobet mines response not recognised - capture skipped. Keys:',
+                        Object.keys(payload || {}).join(', '));
+                }
+                return;
+            }
             if (url.includes('/_api/keno/ClassicKeno/play')) {
                 const gameData = JSON.parse(responseText);
 
@@ -579,26 +659,70 @@
         return transformed;
     }
 
-    function transformRainbetMinesData(minesData) {
-        log('🔵 RAW Rainbet Mines data:', minesData);
+    // Rainbet mines, from an observed cashout response:
+    //   { multiplier, payout, win, success, revealedCellsCount, betId,
+    //     board: ["M",0,0,0,"M",0,0,"M",0,"M",0,"M",0, ...] }   // 25 entries
+    // The mine positions are the indices holding "M". This used to read
+    // minesData.mines and minesData.rounds, neither of which Rainbet sends, so
+    // state.mines came out empty on every round and nothing was ever stored --
+    // the reason mines never worked here even when the request was intercepted.
+    // A per-click reveal ({ multiplier, cell, revealedCellsCount }) carries no
+    // board, so only the finished round is transformed.
+    // Rainbet never puts the stake in a mines RESPONSE -- not in the opening
+    // board, not in a reveal, not in the final board. It is only in the request
+    // that opens the round, so it is stashed by betId there and attached when
+    // the round resolves. Without this, mines P/L on Rainbet reads as zero.
+    const rainbetMinesStake = Object.create(null);
+    function rememberRainbetStake(betId, requestData) {
+        if (!betId || !requestData) return;
+        let body = requestData;
+        if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { return; } }
+        if (!body || typeof body !== 'object') return;
+        const keys = ['betAmount', 'amount', 'bet', 'wager', 'stake', 'value'];
+        for (const k of keys) {
+            const v = parseFloat(body[k]);
+            if (Number.isFinite(v) && v > 0) { rainbetMinesStake[betId] = v; return; }
+        }
+        // Say what WAS there, so the field can be named rather than guessed at.
+        warn('Rainbet mines: no stake field in the opening request. Keys:',
+            Object.keys(body).join(', '));
+    }
 
-        const transformed = {
-            id: minesData.id || `mines-${Date.now()}`,
-            active: minesData.active || false,
-            payoutMultiplier: parseFloat(minesData.multiplier) || 0,
-            payout: parseFloat(minesData.payout) || 0,
-            amount: parseFloat(minesData.bet) || 0,
-            currency: minesData.currency?.toLowerCase() || 'usd',
+    function transformRainbetMinesData(minesData) {
+        const board = Array.isArray(minesData.board) ? minesData.board
+                    : (Array.isArray(minesData.grid) ? minesData.grid : null);
+        if (!board) return null;
+        // Rainbet sends a board three times per round, and only the last one is
+        // the result:
+        //   place bet  -> every cell "X" (hidden)
+        //   reveal     -> no board at all, just { cell, revealedCellsCount }
+        //   cashout    -> 0 for safe, "M" for mine, nothing hidden
+        //   lost       -> same, plus cell:"M", multiplier 0, win false
+        // Treating the opening board as a result would file a finished round with
+        // no mines on every bet, so a board with any cell still hidden is not one.
+        if (board.some(v => String(v).toUpperCase() === 'X')) return null;
+        const mines = [];
+        board.forEach((v, i) => {
+            const cell = String(v).toUpperCase();
+            if (cell === 'M' || cell === 'MINE' || cell === 'BOMB') mines.push(i);
+        });
+        const num = v => parseFloat(v) || 0;
+        return {
+            id: minesData.betId || minesData.id || `mines-${Date.now()}`,
+            active: false,                       // a board only arrives once the round ends
+            payoutMultiplier: num(minesData.multiplier ?? minesData.payoutMultiplier),
+            payout: num(minesData.payout),
+            amount: num(minesData.betAmount ?? minesData.bet ?? minesData.amount)
+                    || rainbetMinesStake[minesData.betId] || 0,
+            currency: String(minesData.currency || 'usd').toLowerCase(),
             state: {
-                mines: Array.isArray(minesData.mines) ? minesData.mines : [],
-                rounds: Array.isArray(minesData.rounds) ? minesData.rounds : (Array.isArray(minesData.revealed) ? minesData.revealed : []),
-                minesCount: parseInt(minesData.minesCount || minesData.mine_count) || 3
+                mines,
+                rounds: [],                      // Rainbet reports a count, not the tiles
+                minesCount: mines.length || parseInt(minesData.minesCount || minesData.mines) || 3
             },
+            revealed: parseInt(minesData.revealedCellsCount) || 0,
             timestamp: new Date().toISOString()
         };
-
-        log('🟢 TRANSFORMED Rainbet Mines data:', transformed);
-        return transformed;
     }
 
     function handleRainbetResponse(responseText, url, method, requestData) {
@@ -643,14 +767,33 @@
                     site: site
                 }, '*');
             }
-            else if (url.includes('/v1/games/mines/play') && response.data) {
-                log('✅ Rainbet Mines game detected:', response.data);
-                const transformedData = transformRainbetMinesData(response.data);
-                window.postMessage({
-                    type: 'MINES_BET_DATA',
-                    data: transformedData,
-                    site: site
-                }, '*');
+            else if (isRainbetMinesURL(url)) {
+                // Same treatment keno already gets: match the game rather than a
+                // path, and say so when a mines response arrives in a shape we
+                // cannot read, instead of dropping it silently.
+                const minesPayload = response.data || response.game || response;
+                // The opening board is where the stake is available to capture.
+                if (minesPayload && Array.isArray(minesPayload.board)
+                    && minesPayload.board.every(v => String(v).toUpperCase() === 'X')) {
+                    rememberRainbetStake(minesPayload.betId, requestData);
+                }
+                const transformedData = minesPayload && transformRainbetMinesData(minesPayload);
+                if (transformedData) delete rainbetMinesStake[transformedData.id];
+                if (transformedData) {
+                    log('✅ Rainbet Mines round finished:', transformedData.state);
+                    window.postMessage({
+                        type: 'MINES_BET_DATA',
+                        data: transformedData,
+                        site: site
+                    }, '*');
+                } else if (minesPayload && minesPayload.cell === undefined
+                           && minesPayload.revealedCellsCount === undefined) {
+                    // A reveal has cell/revealedCellsCount and no board; that is the
+                    // round still running, not a failure. Anything else is a shape
+                    // we do not know about.
+                    warn('Rainbet mines response not recognised - capture skipped. Keys:',
+                        Object.keys(minesPayload || {}).join(', '));
+                }
             }
             // Removed balance update logging - it spams and slows down Rainbet
 
