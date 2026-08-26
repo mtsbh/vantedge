@@ -95,6 +95,24 @@
         return u.includes('rainbet.com') && u.includes('keno');
     }
 
+    // Rainbet's mines route is matched the same loose way as its keno route.
+    // Keno was pinned to /v1/games/keno/play until the path moved and capture
+    // stopped without a word; mines is still pinned to /v1/games/mines/play and
+    // would fail identically. Match the game, not the path.
+    function isRainbetMinesURL(url) {
+        if (typeof url !== 'string') return false;
+        const u = url.toLowerCase();
+        return u.includes('rainbet.com') && u.includes('mines');
+    }
+
+    // Roobet mines was never wired up at all - only keno was - so nothing here
+    // has ever been captured. Match the request so there is something to read.
+    function isRoobetMinesURL(url) {
+        if (typeof url !== 'string') return false;
+        const u = url.toLowerCase();
+        return u.includes('roobet.com') && u.includes('mines');
+    }
+
     function isWinnaKenoURL(url) {
         if (typeof url !== 'string') return false;
         const u = url.toLowerCase();
@@ -119,6 +137,8 @@
             const shouldIntercept = gameAPIEndpoints.some(endpoint => this._url.includes(endpoint)) ||
                                    isWinnaKenoURL(this._url) ||
                                    isRainbetKenoURL(this._url) ||
+                                   isRainbetMinesURL(this._url) ||
+                                   isRoobetMinesURL(this._url) ||
                                    (site.includes('betfury.com') && this._url.toLowerCase().includes('keno'));
 
             if (shouldIntercept) {
@@ -161,6 +181,8 @@
         const shouldIntercept = gameAPIEndpoints.some(endpoint => url.includes(endpoint)) ||
                                isWinnaKenoURL(url) ||
                                isRainbetKenoURL(url) ||
+                               isRainbetMinesURL(url) ||
+                               isRoobetMinesURL(url) ||
                                (site.includes('betfury.com') && url.toLowerCase().includes('keno')) ||
                                (site.includes('betfury.com') && method === 'POST');
 
@@ -238,8 +260,55 @@
         }
     }
 
+    // Roobet mines. Field names are read defensively, the same way the keno
+    // transform above reads them, because Roobet's mines payload has not been
+    // observed - only its keno one has. Whatever it calls the mine positions and
+    // the revealed tiles, one of these should land; if none do, the caller warns
+    // rather than storing an empty round.
+    function transformRoobetMinesData(gameData) {
+        const wager = gameData.wagers && gameData.wagers[0];
+        const mines = gameData.mines || gameData.minePositions || gameData.mine_positions
+                   || gameData.bombs || [];
+        const rounds = gameData.rounds || gameData.revealed || gameData.revealedTiles
+                    || wager?.selections || gameData.selections || gameData.picks || [];
+        const num = v => parseFloat(v) || 0;
+        return {
+            id: gameData.id || `mines-${Date.now()}`,
+            active: !!gameData.active,
+            payoutMultiplier: num(wager?.multiplier || gameData.multiplier || gameData.payout_multiplier),
+            payout: num(wager?.payout || gameData.payout || gameData.winnings),
+            amount: num(wager?.amount || gameData.amount || gameData.wager || gameData.bet),
+            currency: (wager?.currency || gameData.currency || 'usd').toLowerCase(),
+            state: {
+                mines: Array.isArray(mines) ? mines : [],
+                rounds: Array.isArray(rounds) ? rounds : [],
+                minesCount: parseInt(gameData.minesCount || gameData.mineCount
+                    || gameData.mine_count || (Array.isArray(mines) ? mines.length : 0)) || 3
+            },
+            timestamp: new Date().toISOString()
+        };
+    }
+
     function handleRoobetResponse(responseText, url, method, requestData) {
         try {
+            if (isRoobetMinesURL(url)) {
+                const gameData = JSON.parse(responseText);
+                const payload = gameData.data || gameData.game || gameData;
+                const hasBoard = payload && (payload.mines || payload.minePositions
+                    || payload.rounds || payload.revealed);
+                if (hasBoard) {
+                    log('✅ Roobet Mines game detected:', payload);
+                    window.postMessage({
+                        type: 'MINES_BET_DATA',
+                        data: transformRoobetMinesData(payload),
+                        site: site
+                    }, '*');
+                } else {
+                    warn('Roobet mines response not recognised - capture skipped. Keys:',
+                        Object.keys(payload || {}).join(', '));
+                }
+                return;
+            }
             if (url.includes('/_api/keno/ClassicKeno/play')) {
                 const gameData = JSON.parse(responseText);
 
@@ -643,14 +712,23 @@
                     site: site
                 }, '*');
             }
-            else if (url.includes('/v1/games/mines/play') && response.data) {
-                log('✅ Rainbet Mines game detected:', response.data);
-                const transformedData = transformRainbetMinesData(response.data);
-                window.postMessage({
-                    type: 'MINES_BET_DATA',
-                    data: transformedData,
-                    site: site
-                }, '*');
+            else if (isRainbetMinesURL(url)) {
+                // Same treatment keno already gets: match the game rather than a
+                // path, and say so when a mines response arrives in a shape we
+                // cannot read, instead of dropping it silently.
+                const minesPayload = response.data || response.game || response;
+                if (minesPayload && (minesPayload.mines || minesPayload.rounds || minesPayload.revealed)) {
+                    log('✅ Rainbet Mines game detected:', minesPayload);
+                    const transformedData = transformRainbetMinesData(minesPayload);
+                    window.postMessage({
+                        type: 'MINES_BET_DATA',
+                        data: transformedData,
+                        site: site
+                    }, '*');
+                } else {
+                    warn('Rainbet mines response not recognised - capture skipped. Keys:',
+                        Object.keys(minesPayload || {}).join(', '));
+                }
             }
             // Removed balance update logging - it spams and slows down Rainbet
 
