@@ -6696,7 +6696,13 @@
         // check. The toggle now runs as a post-step instead (afterStrategyRun),
         // after the getter has read it, so both work.
         runStrategy(strategyId, methodName) {
-            const spots = this.spotsFor(strategyId);
+            // Variance owns a high/low toggle whose ONLY effect is its count
+            // (5 low, 9 high), so handing it Auto's 6 would silently retire the
+            // feature. On Auto it keeps its own sizes; an explicit pin still wins,
+            // because a pin is the user saying what they want.
+            const spots = (strategyId === 'variance' && this.spotMode === 'auto')
+                ? null
+                : this.spotsFor(strategyId);
             const getter = methodName && methodName.replace(/^select/, 'get');
             if (getter && typeof this[getter] === 'function') {
                 this.traceStrategyGetters();
