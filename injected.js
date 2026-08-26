@@ -668,10 +668,39 @@
     // the reason mines never worked here even when the request was intercepted.
     // A per-click reveal ({ multiplier, cell, revealedCellsCount }) carries no
     // board, so only the finished round is transformed.
+    // Rainbet never puts the stake in a mines RESPONSE -- not in the opening
+    // board, not in a reveal, not in the final board. It is only in the request
+    // that opens the round, so it is stashed by betId there and attached when
+    // the round resolves. Without this, mines P/L on Rainbet reads as zero.
+    const rainbetMinesStake = Object.create(null);
+    function rememberRainbetStake(betId, requestData) {
+        if (!betId || !requestData) return;
+        let body = requestData;
+        if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { return; } }
+        if (!body || typeof body !== 'object') return;
+        const keys = ['betAmount', 'amount', 'bet', 'wager', 'stake', 'value'];
+        for (const k of keys) {
+            const v = parseFloat(body[k]);
+            if (Number.isFinite(v) && v > 0) { rainbetMinesStake[betId] = v; return; }
+        }
+        // Say what WAS there, so the field can be named rather than guessed at.
+        warn('Rainbet mines: no stake field in the opening request. Keys:',
+            Object.keys(body).join(', '));
+    }
+
     function transformRainbetMinesData(minesData) {
         const board = Array.isArray(minesData.board) ? minesData.board
                     : (Array.isArray(minesData.grid) ? minesData.grid : null);
         if (!board) return null;
+        // Rainbet sends a board three times per round, and only the last one is
+        // the result:
+        //   place bet  -> every cell "X" (hidden)
+        //   reveal     -> no board at all, just { cell, revealedCellsCount }
+        //   cashout    -> 0 for safe, "M" for mine, nothing hidden
+        //   lost       -> same, plus cell:"M", multiplier 0, win false
+        // Treating the opening board as a result would file a finished round with
+        // no mines on every bet, so a board with any cell still hidden is not one.
+        if (board.some(v => String(v).toUpperCase() === 'X')) return null;
         const mines = [];
         board.forEach((v, i) => {
             const cell = String(v).toUpperCase();
@@ -683,7 +712,8 @@
             active: false,                       // a board only arrives once the round ends
             payoutMultiplier: num(minesData.multiplier ?? minesData.payoutMultiplier),
             payout: num(minesData.payout),
-            amount: num(minesData.betAmount ?? minesData.bet ?? minesData.amount),
+            amount: num(minesData.betAmount ?? minesData.bet ?? minesData.amount)
+                    || rainbetMinesStake[minesData.betId] || 0,
             currency: String(minesData.currency || 'usd').toLowerCase(),
             state: {
                 mines,
@@ -742,7 +772,13 @@
                 // path, and say so when a mines response arrives in a shape we
                 // cannot read, instead of dropping it silently.
                 const minesPayload = response.data || response.game || response;
+                // The opening board is where the stake is available to capture.
+                if (minesPayload && Array.isArray(minesPayload.board)
+                    && minesPayload.board.every(v => String(v).toUpperCase() === 'X')) {
+                    rememberRainbetStake(minesPayload.betId, requestData);
+                }
                 const transformedData = minesPayload && transformRainbetMinesData(minesPayload);
+                if (transformedData) delete rainbetMinesStake[transformedData.id];
                 if (transformedData) {
                     log('✅ Rainbet Mines round finished:', transformedData.state);
                     window.postMessage({
