@@ -36,7 +36,7 @@ It records every draw, builds a live heatmap, and runs 32 statistical strategies
 - **Gap alerts** - a neutral notice when a combo you're invested in crosses 0.8× or 1.5× of its expected interval.
 - **Real‑money P/L** - profit counted as `stake × (multiplier − 1)` in actual currency, not flat units, with ROI, wagered totals, and free ($0) bets excluded. One shared rule across overlay, popup, and worker.
 - **Mines panel** - now in the sidebar alongside Keno: mine heatmap, per‑mine‑count tabs, safest / random‑safe pickers, clean‑cluster table, the full payout ladder, and your revealed‑tile history.
-- **Significance‑gated models** - bias‑detection strategies use chi‑square / z‑score gates and fall back to plain frequency when no real signal is present, so you're not chasing noise.
+- **Significance‑gated models** - bias‑detection strategies apply chi‑square / z‑score gates and fall back to plain frequency when the gate does not clear. Read the [caveat](#a-note-on-the-significance-gates) on what those gates do and don't rule out.
 - **Legend Stats** - automatically logs every big multiplier hit (≥30×) with the strategy that was active, so you can see what actually works on *your* sessions.
 - **Local‑first & private** - all data lives in your browser (IndexedDB). No accounts, no telemetry. Optional GitHub Gist backup using **your own** token.
 - **Adapts to the board** - auto‑detects classic 1–40 and Rainbet's Extreme 1–56 layouts; the Mines board is found by geometry, so non‑5×5 boards work too.
@@ -236,6 +236,29 @@ draw being scored (3,000 simulated fair games produce a 35%-to-17% curve out of
 nothing). Distinguishing a real 5-point difference from noise here needs roughly
 3,400 games per strategy. So Auto means "this strategy expresses a concentrated
 read, so it fills fewer" - it does not earn anything.
+
+### A note on the significance gates
+
+Several strategies gate on a significance test. Two of those gates are weaker than
+they look, and it is worth knowing which way each one errs.
+
+**Hotzone scans many regions, so its gate clears on fair boards.** Scanning all 539
+contiguous blocks of the 8x5 grid and taking the largest z is a *maximum* over 539
+correlated tests, not one test. Simulated on a fair board, the expected largest |z|
+is about **2.85**, and some block clears |z| > 1.96 in **99%** of runs. Hotzone's
+threshold is 2.5, so on a provably fair board it will often believe it has found a
+hotspot. The correct treatment is a scan statistic with a simulated null (Kulldorff)
+or an FDR correction; a fixed per-block threshold is not one.
+
+**The grid chi-square errs the other way.** Ten numbers are drawn without
+replacement, so the counts are under-dispersed against the multinomial the plain
+Pearson statistic assumes - its expectation is 30, not 39 degrees of freedom.
+Measured false-positive rate is about 0.003 rather than 0.05, so Positional is
+considerably more conservative than p<0.05 implies, and gives up power it did not
+need to.
+
+Neither of these makes a strategy useless - Hotzone still hands back to Hot, and a
+conservative test is a safe failure. But "gated" should not be read as "verified".
 
 > **Hand‑offs are visible.** Most strategies fall back to Hot or Smart while data is thin. Rather than pretend otherwise, Vantedge traces each strategy's internal calls and marks a tile when a clear majority of its ticket came from somewhere else - so clicking Poisson at 18 bets tells you it's really Hot's pick.
 
