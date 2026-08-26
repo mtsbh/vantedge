@@ -6067,21 +6067,39 @@
                 cH[coords[n].c] += hot[n - 1];
             }
 
-            const expectedHitsPerRow = totalBets * 4;
+            // A row is 8 numbers, so it expects 8 * (10/40) = 2 hits per game -- not 4.
+            // At totalBets=100 the old value put chi-square near 500 against a
+            // critical value of 9.488, so the gate fired on every fair board.
+            const expectedHitsPerRow = totalBets * 2;
             const rowChiSquare = rH.reduce((sum, observed) => {
                 return sum + Math.pow(observed - expectedHitsPerRow, 2) / expectedHitsPerRow;
             }, 0);
 
-            const expectedHitsPerCol = totalBets * 2.5;
+            // A column is 5 numbers: 5 * (10/40) = 1.25 hits per game.
+            const expectedHitsPerCol = totalBets * 1.25;
             const colChiSquare = cH.reduce((sum, observed) => {
                 return sum + Math.pow(observed - expectedHitsPerCol, 2) / expectedHitsPerCol;
             }, 0);
 
+            // The expectations above used to be twice their true value, which put
+            // chi-square near 500 against these critical values -- so BOTH gates
+            // fired on 100% of boards and the weights below sat permanently at
+            // 0.3/0.2. That is the behaviour this strategy has always had, and the
+            // one people have actually been playing.
+            //
+            // The expectations are now correct, which would have flipped the gate
+            // to firing about 2.7% of the time and left Positional returning Hot's
+            // ranking on 97% of boards -- a different strategy wearing the same
+            // name. So the spatial weighting stays on by default, and the gate only
+            // ADDS to it when one axis is significant on its own. Positional is a
+            // spatial-weighting picker; it was never really a bias detector, and the
+            // chi-square is now honest enough to say when an axis genuinely stands
+            // out rather than always claiming it does.
             const rowBiasDetected = rowChiSquare > 9.488;   // df=4, p<0.05
             const colBiasDetected = colChiSquare > 14.067;  // df=7, p<0.05
 
-            let rowWeight = 0.1;
-            let colWeight = 0.1;
+            let rowWeight = 0.3;
+            let colWeight = 0.2;
 
             if (rowBiasDetected && colBiasDetected) {
                 rowWeight = 0.3;
@@ -6556,9 +6574,21 @@
 
         getWheelingNumbers(count = 9) {
             if (this.data.kenoStats.totalBets < 20) return this.getHotNumbers(count);
-            const pairs = this.pairCounts(150);
+            const WINDOW = 150;
+            const pairs = this.pairCounts(WINDOW);
+            // Mean and sd of a pair's co-occurrence count over the window actually
+            // available, so a short session is not judged against a full one.
+            const seen = Math.min(WINDOW, this.data.kenoStats.totalBets || WINDOW);
+            const d = this._drawnPerGame || 10, NN = this.numberCount;
+            const pPair = (d / NN) * ((d - 1) / (NN - 1));
+            const pairGate = seen * pPair + 3 * Math.sqrt(seen * pPair * (1 - pPair));
             const pairEntries = Object.entries(pairs)
-                .filter(([, c]) => c > 2).sort(([, a], [, b]) => b - a);
+                // A pair co-occurs with probability (10/40)(9/39) = 0.0577, so over
+                // a 150-draw window the mean count is 8.65 and sd 2.86. `c > 2` sits
+                // below the mean and passed 99% of all 780 pairs, which made the
+                // sort a pick of the extreme tail of 780 comparisons. Gate at the
+                // window's own mean + 3 sd instead.
+                .filter(([, c]) => c > pairGate).sort(([, a], [, b]) => b - a);
             if (pairEntries.length === 0) return this.getHotNumbers(count);
             const groupSize = Math.ceil(count / 3);
             const groups = pairEntries.slice(0, 3).map(([pair]) => pair.split('-').map(Number));
@@ -6634,13 +6664,20 @@
                 { s: _step * 2, e: _step * 3 },
                 { s: _step * 3, e: this.numberCount }
             ];
-            const perZone = Math.ceil(count / zones.length);
+            // floor, not ceil: ceil overfills every zone and the slice at the end
+            // then removes the overflow from the LAST zone only -- at the default
+            // count of 6 that dropped zone 4 entirely, from the one strategy whose
+            // whole point is even coverage. Remainder is spread one per zone.
+            const perZone = Math.floor(count / zones.length);
+            let remainder = count - perZone * zones.length;
             const selected = [];
             const avg = this.data.kenoStats.totalBets / this.numberCount;
             zones.forEach(({ s, e }) => {
                 const nums = Array.from({ length: e - s }, (_, i) => ({ n: s + i + 1, hits: hot[s + i] }))
                     .sort((a, b) => Math.abs(a.hits - avg) - Math.abs(b.hits - avg));
-                selected.push(...nums.slice(0, perZone).map(n => n.n));
+                const take = perZone + (remainder > 0 ? 1 : 0);
+                if (remainder > 0) remainder--;
+                selected.push(...nums.slice(0, take).map(n => n.n));
             });
             return selected.slice(0, count);
         }
