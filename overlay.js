@@ -6688,10 +6688,17 @@
         // wrappers all fill a fixed nine; the get* functions have taken a count
         // all along, so this calls those and keeps the wrapper only where it
         // does something extra on click (Variance's high/low toggle).
+        // Variance used to be excluded from this path so that its select*
+        // wrapper still ran, because that wrapper owns the high/low toggle the
+        // algorithm reads. The cost was that Variance took the wrapper's
+        // argument-less call, so it always played the getter's signature default
+        // of 9 -- ignoring Auto and ignoring a pin -- and skipped the hand-off
+        // check. The toggle now runs as a post-step instead (afterStrategyRun),
+        // after the getter has read it, so both work.
         runStrategy(strategyId, methodName) {
             const spots = this.spotsFor(strategyId);
             const getter = methodName && methodName.replace(/^select/, 'get');
-            if (strategyId !== 'variance' && getter && typeof this[getter] === 'function') {
+            if (getter && typeof this[getter] === 'function') {
                 this.traceStrategyGetters();
                 this._trace = { depth: 0, nested: [] };
                 const nums = safe(() => this[getter](spots));
@@ -6700,10 +6707,24 @@
                 if (Array.isArray(nums) && nums.length) {
                     this.noteStrategyHandoff(strategyId, trace, nums);
                     this.animateSequentialSelection([...nums].sort((a, b) => a - b));
+                    safe(() => this.afterStrategyRun(strategyId));
                     return;
                 }
             }
             if (methodName && typeof this[methodName] === 'function') this[methodName]();
+        }
+
+        // UI state a strategy owns beyond picking numbers. Runs after the getter,
+        // never before: getVarianceNumbers reads strategyToggles.variance, so
+        // flipping it first would apply the new mode to the ticket that was just
+        // built under the old one.
+        afterStrategyRun(strategyId) {
+            if (strategyId !== 'variance') return;
+            const btn = this.overlay?.querySelector('.action-btn-lg[data-action="variance"]');
+            if (btn) btn.classList.toggle('low-mode', !this.strategyToggles.variance);
+            this.strategyToggles.variance = !this.strategyToggles.variance;
+            const api = (typeof browser !== 'undefined') ? browser : chrome;
+            safe(() => api?.storage?.local?.set({ strategyToggles: this.strategyToggles }));
         }
 
         // Most strategies hand off to another one under a data threshold —
