@@ -291,7 +291,7 @@
             // Parity stayed in Core, Coverage never appeared in either grid, and
             // Alternative showed 15 because Parity was occupying a Core slot and so
             // got filtered out of the drawer set as well.
-            this.LAYOUT_VERSION = 5;
+            this.LAYOUT_VERSION = 6;
 
             const browserAPI = (typeof browser !== 'undefined' && browser?.storage) ? browser :
                 (typeof chrome !== 'undefined' && chrome?.storage) ? chrome : null;
@@ -2715,9 +2715,15 @@
                 { id: 'streak', name: 'Streak' },
                 { id: 'entropy', name: 'Entropy' },
 
-                // Row 3 - Shape of the board: where numbers sit, not how often.
+                // Row 3 - Where numbers sit, and what they have actually paid.
+                // Sector used to hold the second slot and was moved to Alternative:
+                // it reads the same row/column axis as Positional and falls back to
+                // getPositionalNumbers outright under 30 games or 20 draws, so on a
+                // young session the two tiles returned the same ticket. Realised
+                // replaces it as the only strategy on either grid that reads a
+                // different source -- your settled bets rather than the draws.
                 { id: 'positional', name: 'Positional' },
-                { id: 'sector', name: 'Sector' },
+                { id: 'realised', name: 'Realised' },
                 { id: 'digitbias', name: 'Digit' },
                 { id: 'coverage', name: 'Coverage' },
 
@@ -3035,7 +3041,7 @@
             { id: 'bayesian', name: 'Bayesian' },
             // Situational — need a specific condition to say anything
             { id: 'drought', name: 'Drought' },
-            { id: 'realised', name: 'Realised' },
+            { id: 'sector', name: 'Sector' },
             { id: 'hotzone', name: 'Hotzone' },
             // Contrarian / no measured signal
             { id: 'anticluster', name: 'Anti-Cluster' },
