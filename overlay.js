@@ -105,16 +105,26 @@
     // Cold, Variance, Transition, Anti-Pattern, Poisson, Anti-Cluster, Balanced,
     // Random — have no measurable concentration, so they keep the default.
     const SPOTS_DEFAULT = 6;
+    // [first click, second click]. Clicking a tile again plays the smaller,
+    // more concentrated version of the same read; a single value means the
+    // strategy has no second mode. These are the owner's picks, settled after
+    // four independent reviews of the strategy code disagreed with each other
+    // (their proposals for Hot alone ranged from 3 to 10).
+    //
+    // They are not an edge. Every spot count on this board returns 98.65-99.07%,
+    // so the number chosen moves variance and nothing else -- a 3-pick on High
+    // wins once in 82 rounds, the same pick on Classic wins 59% of the time.
+    // What the second click buys is concentration: fewer numbers, all of them
+    // ones the strategy actually ranked, instead of a tail padded from Hot.
     const STRATEGY_SPOTS = {
-        // top-heavy: the rate collapses after the first few picks
-        wheeling: 3, bayesian: 3, volatility: 3, portfolio: 3,
-        progressive: 4, realised: 4, drought: 4, positional: 4,
-        overdue: 4, digitbias: 4,
-        // rising: the rate climbs with breadth, so the ticket needs it
-        hotzone: 8,
-        // mild tilt off the default
-        regime: 7, sector: 7, momentum: 7
-        // everything else measured flat enough that 6 is as good as anything
+        hot: [9, 7], cold: [9, 6], smart: [10], ema: [8, 6],
+        overdue: [9, 5], progressive: [8, 5], streak: [8, 5], entropy: [9, 4],
+        positional: [9, 8], sector: [10], digitbias: [8], coverage: [10],
+        montecarlo: [9], variance: [9, 5], antipattern: [8, 6], random: [9],
+        repeat: [6], portfolio: [8], wheeling: [6], momentum: [8, 5],
+        adaptive: [9, 6], edge: [8, 5], regime: [8, 4], bayesian: [9, 5],
+        drought: [8], realised: [6], hotzone: [8], anticluster: [10, 6],
+        balanced: [8], transition: [8, 6], volatility: [7], poisson: [9]
     };
 
     // Stake keno pay tables, 1-40 board with 10 drawn. multiplier[risk][picks][hits].
@@ -5736,9 +5746,20 @@
         // ================================================================
 
         // Spots a strategy runs at: the pin if one is set, else its tuned size.
+        // A pin always wins -- it is the user saying what they want outright.
+        // On Auto, a strategy with two modes alternates between them per click.
         spotsFor(strategyId) {
             if (this.spotMode !== 'auto') return Math.max(1, Math.min(10, Number(this.spotMode) || SPOTS_DEFAULT));
-            return STRATEGY_SPOTS[strategyId] || SPOTS_DEFAULT;
+            const modes = STRATEGY_SPOTS[strategyId];
+            if (!Array.isArray(modes) || !modes.length) return SPOTS_DEFAULT;
+            const second = modes.length > 1 && !!this.strategyToggles?.[strategyId];
+            return second ? modes[1] : modes[0];
+        }
+
+        // Does this tile have a second click at all?
+        hasSecondMode(strategyId) {
+            const m = STRATEGY_SPOTS[strategyId];
+            return Array.isArray(m) && m.length > 1;
         }
 
         renderSpotControl() {
@@ -5749,7 +5770,7 @@
                 .map(n => `<option value="${n}" ${pinned && Number(this.spotMode) === n ? 'selected' : ''}>${n}</option>`).join('');
             el.innerHTML = `
                 <button class="vx-spot-auto ${pinned ? '' : 'on'}" id="overlay-spots-auto"
-                    title="Auto — each strategy runs at its own size: gap reads 4, frequency reads 6, coverage reads 8. Pick a number instead to pin every strategy to it.">Auto</button>
+                    title="Auto — each strategy runs at its own size, and clicking a tile again plays its smaller, more concentrated version. Pick a number instead to pin every strategy to it.">Auto</button>
                 <select class="vx-spot-sel" id="overlay-spots-sel" title="Pin every strategy to this many numbers">
                     <option value="" ${pinned ? '' : 'selected'}>–</option>${opts}
                 </select>
@@ -5890,8 +5911,10 @@
         // that out here keeps the two distinguishable — Variance is the pure
         // statistical reading, Stats the one that also chases the gap.
         getVarianceNumbers(externalCount = null) {
-            const isLow = this.strategyToggles.variance;
-            const count = externalCount ?? (isLow ? 5 : 9);
+            // The 5/9 pair now lives in STRATEGY_SPOTS with every other strategy's,
+            // and runStrategy always supplies it, so this fallback only applies if
+            // something calls the getter directly.
+            const count = externalCount ?? 9;
             const games = this.data.kenoStats.analyzedGames || Math.min(this.data.kenoStats.totalBets, 1000);
             if (games < 20) return this.getHotNumbers(count);
             const N = this.numberCount;
@@ -6737,9 +6760,7 @@
             // (5 low, 9 high), so handing it Auto's 6 would silently retire the
             // feature. On Auto it keeps its own sizes; an explicit pin still wins,
             // because a pin is the user saying what they want.
-            const spots = (strategyId === 'variance' && this.spotMode === 'auto')
-                ? null
-                : this.spotsFor(strategyId);
+            const spots = this.spotsFor(strategyId);
             const getter = methodName && methodName.replace(/^select/, 'get');
             if (getter && typeof this[getter] === 'function') {
                 this.traceStrategyGetters();
@@ -6761,13 +6782,19 @@
         // never before: getVarianceNumbers reads strategyToggles.variance, so
         // flipping it first would apply the new mode to the ticket that was just
         // built under the old one.
+        // Flip to the other mode for NEXT time. Runs after the getter, never
+        // before, so the click just made used the count the badge was showing.
+        // A pin suspends the alternation entirely: with an explicit count set,
+        // every click means the same thing.
         afterStrategyRun(strategyId) {
-            if (strategyId !== 'variance') return;
-            const btn = this.overlay?.querySelector('.action-btn-lg[data-action="variance"]');
-            if (btn) btn.classList.toggle('low-mode', !this.strategyToggles.variance);
-            this.strategyToggles.variance = !this.strategyToggles.variance;
+            if (this.spotMode !== 'auto' || !this.hasSecondMode(strategyId)) return;
+            if (!this.strategyToggles) this.strategyToggles = {};
+            this.strategyToggles[strategyId] = !this.strategyToggles[strategyId];
+            const btn = this.overlay?.querySelector(`.action-btn-lg[data-action="${strategyId}"]`);
+            if (btn) btn.classList.toggle('low-mode', !!this.strategyToggles[strategyId]);
             const api = (typeof browser !== 'undefined') ? browser : chrome;
             safe(() => api?.storage?.local?.set({ strategyToggles: this.strategyToggles }));
+            safe(() => this.refreshSpotBadges());
         }
 
         // Most strategies hand off to another one under a data threshold —

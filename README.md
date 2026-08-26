@@ -221,21 +221,22 @@ The other sixteen, reachable through the **Alternative** toggle. Four of them (R
 
 ### A note on ticket size
 
-The **spots** control sets how many numbers a strategy fills - **Auto** gives each
-strategy its own size, or pin every strategy to 2-10.
+Each strategy has a size of its own, and **clicking a tile again plays its smaller,
+more concentrated version** - Hot goes 9 then 7, Overdue 9 then 5, Regime 8 then 4.
+Seventeen of the 32 have a second mode; the rest play one size. Pinning a count in
+the **spots** control overrides both and suspends the alternation.
 
-**It changes variance, not expected return.** Computed from the pay tables in this
+**This changes variance, not expected return.** Computed from the pay tables in this
 repo, every spot count at every risk level returns **98.65-99.07%**. What changes is
 the shape: a 3-pick on High wins once in 82 rounds (SD 8.9); a 3-pick on Classic
 wins 59% of the time (SD 1.4). Same edge, thirty-fold difference in swing.
 
-**The per-strategy Auto sizes are a labelling convention, not a measured edge.**
-They were read off where each strategy's hit rate falls across its own ranking - but
-that curve appears on a *provably fair* board too if the ranking window overlaps the
-draw being scored (3,000 simulated fair games produce a 35%-to-17% curve out of
-nothing). Distinguishing a real 5-point difference from noise here needs roughly
-3,400 games per strategy. So Auto means "this strategy expresses a concentrated
-read, so it fills fewer" - it does not earn anything.
+What the second click buys is concentration rather than edge - fewer numbers, all
+of them ones the strategy actually ranked, instead of a tail padded out from Hot.
+The sizes themselves were settled by the owner after four independent reviews of
+the strategy code disagreed with each other, their proposals for Hot alone ranging
+from 3 to 10. That disagreement is the honest summary of the evidence: no count is
+worth more than another, so the choice is which session you want to sit through.
 
 ### A note on the significance gates
 
