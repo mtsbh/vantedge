@@ -169,13 +169,13 @@ All 32 strategies read the same per‑site draw history and return a ticket at t
 </tbody>
 </table>
 
-**Row 3 - Shape of the board.** Where numbers sit, not how often.
+**Row 3 - Where numbers sit, and what has actually paid.**
 
 <table>
 <thead><tr><th width="52"></th><th width="140">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
 <tbody>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/positional.svg"><img src="docs/icons/light/positional.svg" width="20" height="20" alt=""></picture></td><td><b>Positional</b></td><td>Grid chi-square</td><td>Row/column bias on the 8×5 board (p&lt;0.05), measured over the whole session</td></tr>
-<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/sector.svg"><img src="docs/icons/light/sector.svg" width="20" height="20" alt=""></picture></td><td><b>Sector</b></td><td>Recent row/column bias</td><td>Scores rows and columns over the last ~60 draws, takes the two strongest, picks the most overdue numbers inside them - catches a bias Positional is too slow to see</td></tr>
+<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/realised.svg"><img src="docs/icons/light/realised.svg" width="20" height="20" alt=""></picture></td><td><b>Realised</b></td><td>Return per unit staked</td><td>Reads your <b>bet</b> history, not the draws: what each number actually returned per unit staked, shrunk toward break-even. Needs 10+ paid bets</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/digitbias.svg"><img src="docs/icons/light/digitbias.svg" width="20" height="20" alt=""></picture></td><td><b>Digit</b></td><td>Family z-score → gap</td><td>Groups by last digit, tests each family against its expected share, then picks the most overdue numbers inside the families that clear significance</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/coverage.svg"><img src="docs/icons/light/coverage.svg" width="20" height="20" alt=""></picture></td><td><b>Coverage</b></td><td>Hot + max-spread</td><td>Hot numbers plus picks that maximise board spread</td></tr>
 </tbody>
@@ -195,7 +195,7 @@ All 32 strategies read the same per‑site draw history and return a ticket at t
 
 ### Alternative grid
 
-The other sixteen, reachable through the **Alternative** toggle. Four of them (Repeat, Portfolio, Wheeling, Momentum) earned a Core slot on signal alone and only missed out because Core is full. Adaptive, Edge, Regime and Bayesian compose other strategies by design, so they are never marked as handing off. Drought, Realised and Hotzone need a specific condition before they say anything. The rest are contrarian reads that showed no measured signal, which for a contrarian is the strategy working rather than failing.
+The other sixteen, reachable through the **Alternative** toggle. Four of them (Repeat, Portfolio, Wheeling, Momentum) earned a Core slot on signal alone and only missed out because Core is full. Adaptive, Edge, Regime and Bayesian compose other strategies by design, so they are never marked as handing off. Drought, Sector and Hotzone need a specific condition before they say anything. The rest are contrarian reads that showed no measured signal, which for a contrarian is the strategy working rather than failing.
 
 <table>
 <thead><tr><th width="52"></th><th width="150">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
@@ -209,7 +209,7 @@ The other sixteen, reachable through the **Alternative** toggle. Four of them (R
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/regime.svg"><img src="docs/icons/light/regime.svg" width="20" height="20" alt=""></picture></td><td><b>Regime</b></td><td>CUSUM change-point detection</td><td>Detects a shift into a hot or cold distributional regime and switches blends accordingly (40+ games)</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/bayesian.svg"><img src="docs/icons/light/bayesian.svg" width="20" height="20" alt=""></picture></td><td><b>Bayesian</b></td><td>Dynamic posterior</td><td>Per-number hit-probability posterior, updated after every draw</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/drought.svg"><img src="docs/icons/light/drought.svg" width="20" height="20" alt=""></picture></td><td><b>Drought</b></td><td>Rate vs its own pace</td><td>Numbers whose recent rate has fallen furthest below <b>their own</b> session pace - a number can run hot all session and still be in a personal drought</td></tr>
-<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/realised.svg"><img src="docs/icons/light/realised.svg" width="20" height="20" alt=""></picture></td><td><b>Realised</b></td><td>Return per unit staked</td><td>Reads your <b>bet</b> history, not the draws: what each number actually returned per unit staked, shrunk toward break-even. Needs 10+ paid bets</td></tr>
+<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/sector.svg"><img src="docs/icons/light/sector.svg" width="20" height="20" alt=""></picture></td><td><b>Sector</b></td><td>Recent row/column bias</td><td>Scores rows and columns over the last ~60 draws, takes the two strongest, picks the most overdue numbers inside them - catches a bias Positional is too slow to see</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/hotzone.svg"><img src="docs/icons/light/hotzone.svg" width="20" height="20" alt=""></picture></td><td><b>Hotzone</b></td><td>2-D block z-score → gap</td><td>Scans 2×2 and larger blocks for local bias (z &gt; 2.5), then picks the most overdue numbers inside them - hands back to Hot when nothing stands out</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/anticluster.svg"><img src="docs/icons/light/anticluster.svg" width="20" height="20" alt=""></picture></td><td><b>Anti-Cluster</b></td><td>Minimum co-occurrence</td><td>The mirror of Wheeling - builds a set of numbers that have <i>avoided</i> each other, spreading the ticket across independent draws</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/balanced.svg"><img src="docs/icons/light/balanced.svg" width="20" height="20" alt=""></picture></td><td><b>Balanced</b></td><td>Zone coverage</td><td>Four equal zones, taking the numbers sitting closest to expected in each - the unremarkable ones, deliberately avoiding both tails</td></tr>
