@@ -6081,11 +6081,25 @@
                 return sum + Math.pow(observed - expectedHitsPerCol, 2) / expectedHitsPerCol;
             }, 0);
 
+            // The expectations above used to be twice their true value, which put
+            // chi-square near 500 against these critical values -- so BOTH gates
+            // fired on 100% of boards and the weights below sat permanently at
+            // 0.3/0.2. That is the behaviour this strategy has always had, and the
+            // one people have actually been playing.
+            //
+            // The expectations are now correct, which would have flipped the gate
+            // to firing about 2.7% of the time and left Positional returning Hot's
+            // ranking on 97% of boards -- a different strategy wearing the same
+            // name. So the spatial weighting stays on by default, and the gate only
+            // ADDS to it when one axis is significant on its own. Positional is a
+            // spatial-weighting picker; it was never really a bias detector, and the
+            // chi-square is now honest enough to say when an axis genuinely stands
+            // out rather than always claiming it does.
             const rowBiasDetected = rowChiSquare > 9.488;   // df=4, p<0.05
             const colBiasDetected = colChiSquare > 14.067;  // df=7, p<0.05
 
-            let rowWeight = 0.1;
-            let colWeight = 0.1;
+            let rowWeight = 0.3;
+            let colWeight = 0.2;
 
             if (rowBiasDetected && colBiasDetected) {
                 rowWeight = 0.3;

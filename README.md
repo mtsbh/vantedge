@@ -251,13 +251,16 @@ on a fair board the gate fires **3.4-4.9%** of the time, close to the nominal 5%
 Correcting the standard deviation alone would take that to **14-17%**, so the
 apparent bug is load-bearing and should be left alone.
 
-**Positional was firing on every board, and is now fixed.** Its row and column
-chi-square used expected counts of `totalBets * 4` and `* 2.5`. A row is 8 numbers,
-so it expects 8 x (10/40) = 2 hits per game, and a column of 5 expects 1.25 - both
-were exactly twice the truth. At 100 games that put chi-square near 500 against a
-critical value of 9.488, so **both gates fired on 100% of fair boards**. With the
-expectations corrected the gate fires on about **2.6-2.9%**, slightly conservative
-against its nominal 5% because draws are made without replacement.
+**Positional is a spatial-weighting picker, not a bias detector.** Its chi-square
+used expected counts of `totalBets * 4` and `* 2.5`; a row of 8 numbers expects
+8 x (10/40) = 2 hits per game and a column of 5 expects 1.25, so both were exactly
+twice the truth. That put chi-square near 500 against a critical value of 9.488, so
+both gates fired on **100% of boards** and the row/column weighting was permanently
+on. The expectations are now correct, but the weighting stays on by default,
+because always-on is the behaviour this strategy has always had - switching it to
+fire on 2.7% of boards would leave it returning Hot's ranking almost always, which
+is a different strategy under the same name. The gate now only adds emphasis when
+one axis genuinely stands out.
 
 Neither is a reason to distrust a pick - a conservative test is a safe way to fail,
 and Hotzone hands back to Hot when its gate does not clear. But "gated" means the
