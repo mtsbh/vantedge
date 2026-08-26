@@ -168,7 +168,7 @@ All 32 strategies read the same per‑site draw history and return a ticket at t
 **Row 1 - Frequency.** Usable almost immediately (~10 games).
 
 <table>
-<thead><tr><th width="34"></th><th width="140">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
+<thead><tr><th width="52"></th><th width="140">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
 <tbody>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/hot.svg"><img src="docs/icons/light/hot.svg" width="20" height="20" alt=""></picture></td><td><b>Hot</b></td><td>Frequency</td><td>Most-drawn numbers across all recorded games</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/cold.svg"><img src="docs/icons/light/cold.svg" width="20" height="20" alt=""></picture></td><td><b>Cold</b></td><td>Inverse frequency</td><td>Least-drawn - mean-reversion</td></tr>
@@ -180,7 +180,7 @@ All 32 strategies read the same per‑site draw history and return a ticket at t
 **Row 2 - Timing.** How numbers space themselves out (~20–30 games).
 
 <table>
-<thead><tr><th width="34"></th><th width="140">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
+<thead><tr><th width="52"></th><th width="140">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
 <tbody>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/overdue.svg"><img src="docs/icons/light/overdue.svg" width="20" height="20" alt=""></picture></td><td><b>Overdue</b></td><td>Regression to mean</td><td><code>betsSince > 1.5× avgInterval</code></td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/progressive.svg"><img src="docs/icons/light/progressive.svg" width="20" height="20" alt=""></picture></td><td><b>Progressive</b></td><td>Momentum score</td><td><code>frequency / recency</code> - numbers heating up now</td></tr>
@@ -192,7 +192,7 @@ All 32 strategies read the same per‑site draw history and return a ticket at t
 **Row 3 - Shape of the board.** Where numbers sit, not how often.
 
 <table>
-<thead><tr><th width="34"></th><th width="140">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
+<thead><tr><th width="52"></th><th width="140">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
 <tbody>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/positional.svg"><img src="docs/icons/light/positional.svg" width="20" height="20" alt=""></picture></td><td><b>Positional</b></td><td>Grid chi-square</td><td>Row/column bias on the 8×5 board (p&lt;0.05), measured over the whole session</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/sector.svg"><img src="docs/icons/light/sector.svg" width="20" height="20" alt=""></picture></td><td><b>Sector</b></td><td>Recent row/column bias</td><td>Scores rows and columns over the last ~60 draws, takes the two strongest, picks the most overdue numbers inside them - catches a bias Positional is too slow to see</td></tr>
@@ -204,7 +204,7 @@ All 32 strategies read the same per‑site draw history and return a ticket at t
 **Row 4 - Statistical treatments, then the control.**
 
 <table>
-<thead><tr><th width="34"></th><th width="140">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
+<thead><tr><th width="52"></th><th width="140">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
 <tbody>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/montecarlo.svg"><img src="docs/icons/light/montecarlo.svg" width="20" height="20" alt=""></picture></td><td><b>Monte Carlo</b></td><td>200-sim weighted sampling</td><td>Simulates draws weighted by hit counts - Hot with deliberate jitter, so you don't play the identical ticket every round</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/variance.svg"><img src="docs/icons/light/variance.svg" width="20" height="20" alt=""></picture></td><td><b>Variance</b></td><td>Z-score deficit</td><td>How far each number sits <i>below</i> the 0.25/game expectation over the last ~120 draws - a recent drought, not an all-time cold streak</td></tr>
@@ -218,7 +218,7 @@ All 32 strategies read the same per‑site draw history and return a ticket at t
 The other sixteen, reachable through the **Alternative** toggle. The tag under each name is why it sits here rather than on Core: *Autonomous* earned a Core slot on signal alone and only missed out because Core is full; *Meta* strategies compose other strategies by design, so they are never marked as handing off; *Situational* ones need a specific condition before they say anything; and *Contrarian* ones showed no measured signal, which for a contrarian read is the strategy working rather than failing.
 
 <table>
-<thead><tr><th width="34"></th><th width="205">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
+<thead><tr><th width="52"></th><th width="205">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
 <tbody>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/repeat.svg"><img src="docs/icons/light/repeat.svg" width="20" height="20" alt=""></picture></td><td><b>Repeat</b> <small>Autonomous</small></td><td>Lag-1 autocorrelation</td><td>Given a number was drawn, how often it was drawn again in the very next game, against the 0.25 chance rate. The only strategy that reads draw <b>order</b></td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/portfolio.svg"><img src="docs/icons/light/portfolio.svg" width="20" height="20" alt=""></picture></td><td><b>Portfolio</b> <small>Autonomous</small></td><td>Sharpe-style heat/risk</td><td>Heat ÷ interval variance - strong heat <i>and</i> a steady pattern</td></tr>
