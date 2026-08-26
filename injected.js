@@ -265,25 +265,35 @@
     // observed - only its keno one has. Whatever it calls the mine positions and
     // the revealed tiles, one of these should land; if none do, the caller warns
     // rather than storing an empty round.
+    // Roobet mines, from an observed cashout response:
+    //   { deck: { "0":"diamond", ... "9":"mine", "11":"mine", "17":"mine" },
+    //     bet: { betAmount, currency, mult, payoutMultiplier, profit, won,
+    //            betId, closedOut, gameName:"mines" } }
+    // Mine positions are the deck keys whose value is "mine". The earlier
+    // version of this guessed at mines/minePositions/bombs arrays; Roobet sends
+    // none of those. A per-click reveal ({ result, payoutMultiplier,
+    // provablyFairInfo.roundOver:false }) carries no deck, so it is skipped.
     function transformRoobetMinesData(gameData) {
-        const wager = gameData.wagers && gameData.wagers[0];
-        const mines = gameData.mines || gameData.minePositions || gameData.mine_positions
-                   || gameData.bombs || [];
-        const rounds = gameData.rounds || gameData.revealed || gameData.revealedTiles
-                    || wager?.selections || gameData.selections || gameData.picks || [];
+        const deck = gameData.deck || gameData.bet?.deck;
+        if (!deck || typeof deck !== 'object') return null;
+        const mines = Object.keys(deck)
+            .filter(k => String(deck[k]).toLowerCase() === 'mine')
+            .map(Number)
+            .filter(n => Number.isFinite(n))
+            .sort((a, b) => a - b);
+        const bet = gameData.bet || gameData;
         const num = v => parseFloat(v) || 0;
         return {
-            id: gameData.id || `mines-${Date.now()}`,
-            active: !!gameData.active,
-            payoutMultiplier: num(wager?.multiplier || gameData.multiplier || gameData.payout_multiplier),
-            payout: num(wager?.payout || gameData.payout || gameData.winnings),
-            amount: num(wager?.amount || gameData.amount || gameData.wager || gameData.bet),
-            currency: (wager?.currency || gameData.currency || 'usd').toLowerCase(),
+            id: bet.betId || bet.id || `mines-${Date.now()}`,
+            active: false,                       // a deck only arrives once the round ends
+            payoutMultiplier: num(bet.payoutMultiplier ?? bet.mult),
+            payout: num(bet.payoutValue ?? bet.payout),
+            amount: num(bet.betAmount ?? bet.amount),
+            currency: String(bet.currency || bet.balanceType || 'usd').toLowerCase(),
             state: {
-                mines: Array.isArray(mines) ? mines : [],
-                rounds: Array.isArray(rounds) ? rounds : [],
-                minesCount: parseInt(gameData.minesCount || gameData.mineCount
-                    || gameData.mine_count || (Array.isArray(mines) ? mines.length : 0)) || 3
+                mines,
+                rounds: [],                      // Roobet does not report which tiles were opened
+                minesCount: mines.length || 3
             },
             timestamp: new Date().toISOString()
         };
@@ -294,16 +304,17 @@
             if (isRoobetMinesURL(url)) {
                 const gameData = JSON.parse(responseText);
                 const payload = gameData.data || gameData.game || gameData;
-                const hasBoard = payload && (payload.mines || payload.minePositions
-                    || payload.rounds || payload.revealed);
-                if (hasBoard) {
-                    log('✅ Roobet Mines game detected:', payload);
+                const transformed = payload && transformRoobetMinesData(payload);
+                if (transformed) {
+                    log('✅ Roobet Mines round finished:', transformed.state);
                     window.postMessage({
                         type: 'MINES_BET_DATA',
-                        data: transformRoobetMinesData(payload),
+                        data: transformed,
                         site: site
                     }, '*');
-                } else {
+                } else if (payload && payload.result === undefined) {
+                    // A reveal has `result` and no deck; that is the round still
+                    // running rather than a shape we failed to read.
                     warn('Roobet mines response not recognised - capture skipped. Keys:',
                         Object.keys(payload || {}).join(', '));
                 }
@@ -648,26 +659,40 @@
         return transformed;
     }
 
+    // Rainbet mines, from an observed cashout response:
+    //   { multiplier, payout, win, success, revealedCellsCount, betId,
+    //     board: ["M",0,0,0,"M",0,0,"M",0,"M",0,"M",0, ...] }   // 25 entries
+    // The mine positions are the indices holding "M". This used to read
+    // minesData.mines and minesData.rounds, neither of which Rainbet sends, so
+    // state.mines came out empty on every round and nothing was ever stored --
+    // the reason mines never worked here even when the request was intercepted.
+    // A per-click reveal ({ multiplier, cell, revealedCellsCount }) carries no
+    // board, so only the finished round is transformed.
     function transformRainbetMinesData(minesData) {
-        log('🔵 RAW Rainbet Mines data:', minesData);
-
-        const transformed = {
-            id: minesData.id || `mines-${Date.now()}`,
-            active: minesData.active || false,
-            payoutMultiplier: parseFloat(minesData.multiplier) || 0,
-            payout: parseFloat(minesData.payout) || 0,
-            amount: parseFloat(minesData.bet) || 0,
-            currency: minesData.currency?.toLowerCase() || 'usd',
+        const board = Array.isArray(minesData.board) ? minesData.board
+                    : (Array.isArray(minesData.grid) ? minesData.grid : null);
+        if (!board) return null;
+        const mines = [];
+        board.forEach((v, i) => {
+            const cell = String(v).toUpperCase();
+            if (cell === 'M' || cell === 'MINE' || cell === 'BOMB') mines.push(i);
+        });
+        const num = v => parseFloat(v) || 0;
+        return {
+            id: minesData.betId || minesData.id || `mines-${Date.now()}`,
+            active: false,                       // a board only arrives once the round ends
+            payoutMultiplier: num(minesData.multiplier ?? minesData.payoutMultiplier),
+            payout: num(minesData.payout),
+            amount: num(minesData.betAmount ?? minesData.bet ?? minesData.amount),
+            currency: String(minesData.currency || 'usd').toLowerCase(),
             state: {
-                mines: Array.isArray(minesData.mines) ? minesData.mines : [],
-                rounds: Array.isArray(minesData.rounds) ? minesData.rounds : (Array.isArray(minesData.revealed) ? minesData.revealed : []),
-                minesCount: parseInt(minesData.minesCount || minesData.mine_count) || 3
+                mines,
+                rounds: [],                      // Rainbet reports a count, not the tiles
+                minesCount: mines.length || parseInt(minesData.minesCount || minesData.mines) || 3
             },
+            revealed: parseInt(minesData.revealedCellsCount) || 0,
             timestamp: new Date().toISOString()
         };
-
-        log('🟢 TRANSFORMED Rainbet Mines data:', transformed);
-        return transformed;
     }
 
     function handleRainbetResponse(responseText, url, method, requestData) {
@@ -717,15 +742,19 @@
                 // path, and say so when a mines response arrives in a shape we
                 // cannot read, instead of dropping it silently.
                 const minesPayload = response.data || response.game || response;
-                if (minesPayload && (minesPayload.mines || minesPayload.rounds || minesPayload.revealed)) {
-                    log('✅ Rainbet Mines game detected:', minesPayload);
-                    const transformedData = transformRainbetMinesData(minesPayload);
+                const transformedData = minesPayload && transformRainbetMinesData(minesPayload);
+                if (transformedData) {
+                    log('✅ Rainbet Mines round finished:', transformedData.state);
                     window.postMessage({
                         type: 'MINES_BET_DATA',
                         data: transformedData,
                         site: site
                     }, '*');
-                } else {
+                } else if (minesPayload && minesPayload.cell === undefined
+                           && minesPayload.revealedCellsCount === undefined) {
+                    // A reveal has cell/revealedCellsCount and no board; that is the
+                    // round still running, not a failure. Anything else is a shape
+                    // we do not know about.
                     warn('Rainbet mines response not recognised - capture skipped. Keys:',
                         Object.keys(minesPayload || {}).join(', '));
                 }
