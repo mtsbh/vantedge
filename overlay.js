@@ -3877,7 +3877,13 @@
                    display: none !important;
                }
 
-                .low-mode { background-color: #ffcc00; color: #333; font-weight: bold; }
+                /* Second click. This used to be a solid #ffcc00 fill, which was
+                   fine when only Variance had two modes and unreadable once 17
+                   strategies did. The amber now marks the tile without repainting
+                   it, and the spot badge carries the number itself. */
+                .low-mode { border-color: rgba(255, 204, 0, 0.55) !important;
+                            box-shadow: inset 0 0 0 1px rgba(255, 204, 0, 0.22); }
+                .low-mode .vx-strat-icon { color: #ffcc00; }
                 .vx-spot-badge.second { color: #ffcc00; font-weight: 700; }
 
                 /* --- REGIME BUTTON COLOR --- */
@@ -5946,13 +5952,8 @@
         selectVarianceNumbers() {
             const numbers = this.getVarianceNumbers();
             this.animateSequentialSelection(numbers);
-            const btn = this.overlay.querySelector('.action-btn-lg[data-action="variance"]');
-            if (btn) {
-                btn.classList.toggle('low-mode', !this.strategyToggles.variance);
-            }
-            this.strategyToggles.variance = !this.strategyToggles.variance;
-            const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
-            browserAPI.storage.local.set({ strategyToggles: this.strategyToggles });
+            // The mode flip lives in afterStrategyRun now, for every strategy that
+            // has two modes. Doing it here as well would flip it twice per click.
         }
 
         // --- Strategy: Entropy ---
