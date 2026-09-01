@@ -245,6 +245,7 @@
             this.dragStart = { x: 0, y: 0 };
             this.position = { x: 20, y: 100 };
             this.stakeKenoButtons = [];
+            this.correlationData = null;
             this.mutationObserver = null;
             this.cachedButtons = null;
             this.lastCacheTime = 0;
@@ -354,7 +355,7 @@
 
                 // Row 2: Statistical Analysis
                 overdue: { name: "Overdue", method: "Regression to Mean", description: "Selects numbers with highest overdue score (betsSince > 1.5x avgInterval). Uses regression to mean theory to find 'due' numbers.", usage: "Best for: Exploiting mean reversion on numbers that should appear soon." },
-                variance: { name: "Variance", method: "Z-Score Deficit", description: "Z-score deficit over the recent window: how far each number sits BELOW the 0.25-per-game expectation across the last ~120 draws. Picks what is starved lately, which is a different set from Cold (lowest all-time count).", usage: "Best for: Playing a recent drought rather than an all-time cold streak." },
+                variance: { name: "Variance", method: "Chi-Square/Z-Score", description: "Statistical tests (chi-square under 50 bets, z-score above it) to find the numbers whose all-time count deviates most from the 0.5-per-game expectation.", usage: "Best for: High-confidence statistical analysis." },
                 positional: { name: "Positional", method: "Grid Zone Analysis + Chi-Square", description: "Analyzes 8x5 grid with chi-square validation to detect statistically significant row/column biases (p<0.05).", usage: "Best for: Scientific detection of spatial RNG biases. Top performer on Stake!" },
                 hotzone: { name: "Hotzone", method: "2-D Block Z-Score → Gap", description: "Scans 2×2 and larger blocks of the board for a locally significant bias (z > 2.5), then picks the most overdue numbers inside the strongest blocks. Hands back Hot when no block stands out, rather than dressing up the same ranking.", usage: "Best for: Localized spatial bias that row/column averages dilute away." },
                 progressive: { name: "Progressive", method: "Momentum Analysis", description: "Calculates a momentum score (frequency / recency) to find accelerating numbers.", usage: "Best for: Spotting numbers heating up now." },
@@ -369,7 +370,7 @@
                 volatility: { name: "Volatility", method: "Grid Variance Analysis", description: "Coefficient of variation of each number's gaps — the spread of its intervals against its own mean interval. High CV means the number arrives in bursts and lulls rather than at a steady pace. The exact mirror of Entropy, which takes the steadiest numbers.", usage: "Best for: Numbers that move in bursts, when you want to be on for the next one." },
                 // Row 5: Precision Methods
                 ema: { name: "EMA", method: "Exponential Moving Average", description: "Recency-weighted frequency. Alpha adapts between 0.15 and 0.30 with how volatile the recent draws are — steadier board, longer memory. Recent games count several times more than old ones, so it turns faster than Hot when a session shifts.", usage: "Best for: Live sessions where trends evolve fast." },
-                digitbias: { name: "Digit", method: "Family Z-Score → Gap", description: "Groups numbers by last digit, scores each family against its expected share of the draws, then picks the most overdue numbers inside the families that clear significance. The family decides the pool; the gap decides the numbers.", usage: "Best for: A board where whole digit families run above their share." },
+                digitbias: { name: "Digit", method: "Last-Digit Chi-Square", description: "Tests whether numbers ending 0-9 are drawn at unequal rates. A chi-square gate (p<0.05, df=9) has to clear before the digit z-scores boost each number's heat; otherwise it falls back to Hot.", usage: "Best for: Sites with systematic single-digit RNG skew." },
 
                 // Row 7: Meta Strategies
                 adaptive: { name: "Adaptive", method: "Session Meta-Strategy", description: "Queries AI performance scores and blends the top 2 recommended strategies weighted by their recent win rates. Dynamically updates as session patterns shift.", usage: "Best for: Any session length. The strategy that picks your strategy." },
@@ -757,7 +758,39 @@
                 this.renderInsights();
                 this.updateAIRecommendation();
                 safe(() => this.renderKenoPayouts());
+                this.fetchAndDisplayCorrelations();
                 this.lastUiUpdateTime = now;
+            }
+        }
+
+        fetchAndDisplayCorrelations() {
+            // Throttle correlation analysis - it's expensive and not needed on every bet
+            const now = Date.now();
+            if (this.lastCorrelationFetch && (now - this.lastCorrelationFetch) < 5000) {
+                return; // Skip if we fetched in the last 5 seconds
+            }
+            this.lastCorrelationFetch = now;
+
+            const siteKey = `${this.storageOrigin}-keno-session`;
+            const results = this.cachedKenoResults?.[siteKey] || [];
+
+            if (results.length < 10) {
+                this.correlationData = null;
+                return;
+            }
+            const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
+            if (browserAPI && browserAPI.runtime && browserAPI.runtime.sendMessage) {
+                const origin = this.storageOrigin;
+                browserAPI.runtime.sendMessage({ type: 'ANALYZE_CORRELATIONS', origin: origin }, (response) => {
+                    if (browserAPI.runtime.lastError) {
+                        // Service worker might be inactive - silently skip (won't break overlay)
+                        this.correlationData = null;
+                        return;
+                    }
+                    if (response && response.result) {
+                        this.correlationData = response.result;
+                    }
+                });
             }
         }
 
@@ -5912,32 +5945,19 @@
         // that out here keeps the two distinguishable — Variance is the pure
         // statistical reading, Stats the one that also chases the gap.
         getVarianceNumbers(externalCount = null) {
-            // The 5/9 pair now lives in STRATEGY_SPOTS with every other strategy's,
-            // and runStrategy always supplies it, so this fallback only applies if
-            // something calls the getter directly.
-            const count = externalCount ?? 9;
-            const games = this.data.kenoStats.analyzedGames || Math.min(this.data.kenoStats.totalBets, 1000);
-            if (games < 20) return this.getHotNumbers(count);
-            const N = this.numberCount;
-            const p = (this._drawnPerGame || 10) / N; // 0.25 on a 40-grid
-            // Deficit over a recent window, not the whole session. Ranking the
-            // all-time deficit would be a monotone transform of the raw hit
-            // count — the exact ordering Cold already gives — because every
-            // number shares the same expectation. Scoring the window instead
-            // finds numbers starved LATELY, which a number can be while still
-            // sitting mid-table all-time.
-            const window = Math.max(40, Math.min(120, Math.floor(games / 2)));
-            const draws = this.getRecentDraws(window);
-            const w = draws.length;
-            if (w < 20) return this.getColdNumbers(count);
-            const seen = new Array(N + 1).fill(0);
-            for (const d of draws) for (const n of d) if (n >= 1 && n <= N) seen[n]++;
-            const E = w * p;
-            const stdDev = Math.sqrt(w * p * (1 - p)) || 1;
-            return Array.from({ length: N }, (_, i) => ({ n: i + 1, s: (E - seen[i + 1]) / stdDev }))
-                .sort((a, b) => b.s - a.s) // + = under-drawn in the window
-                .slice(0, count)
-                .map(x => x.n);
+            const isLow = this.strategyToggles.variance;
+            const count = externalCount ?? (isLow ? 5 : 9);
+            if (this.data.kenoStats.totalBets < 20) return this.getHotNumbers(count);
+            const useChi = this.data.kenoStats.totalBets < 50;
+            const hot = this.data.kenoStats.hotNumbers;
+            if (useChi) {
+                const E = this.data.kenoStats.totalBets * 0.5;
+                return hot.map((O, i) => ({ n: i + 1, s: Math.pow(O - E, 2) / E })).sort((a, b) => b.s - a.s).slice(0, count).map(x => x.n);
+            } else {
+                const expectedPerNum = this.data.kenoStats.totalBets * 0.5;
+                const stdDev = Math.sqrt(expectedPerNum * 0.5);
+                return hot.map((o, i) => ({ n: i + 1, s: (o - expectedPerNum) / stdDev })).sort((a, b) => b.s - a.s).slice(0, count).map(x => x.n);
+            }
         }
         selectVarianceNumbers() {
             const numbers = this.getVarianceNumbers();
@@ -6086,39 +6106,21 @@
                 cH[coords[n].c] += hot[n - 1];
             }
 
-            // A row is 8 numbers, so it expects 8 * (10/40) = 2 hits per game -- not 4.
-            // At totalBets=100 the old value put chi-square near 500 against a
-            // critical value of 9.488, so the gate fired on every fair board.
-            const expectedHitsPerRow = totalBets * 2;
+            const expectedHitsPerRow = totalBets * 4;
             const rowChiSquare = rH.reduce((sum, observed) => {
                 return sum + Math.pow(observed - expectedHitsPerRow, 2) / expectedHitsPerRow;
             }, 0);
 
-            // A column is 5 numbers: 5 * (10/40) = 1.25 hits per game.
-            const expectedHitsPerCol = totalBets * 1.25;
+            const expectedHitsPerCol = totalBets * 2.5;
             const colChiSquare = cH.reduce((sum, observed) => {
                 return sum + Math.pow(observed - expectedHitsPerCol, 2) / expectedHitsPerCol;
             }, 0);
 
-            // The expectations above used to be twice their true value, which put
-            // chi-square near 500 against these critical values -- so BOTH gates
-            // fired on 100% of boards and the weights below sat permanently at
-            // 0.3/0.2. That is the behaviour this strategy has always had, and the
-            // one people have actually been playing.
-            //
-            // The expectations are now correct, which would have flipped the gate
-            // to firing about 2.7% of the time and left Positional returning Hot's
-            // ranking on 97% of boards -- a different strategy wearing the same
-            // name. So the spatial weighting stays on by default, and the gate only
-            // ADDS to it when one axis is significant on its own. Positional is a
-            // spatial-weighting picker; it was never really a bias detector, and the
-            // chi-square is now honest enough to say when an axis genuinely stands
-            // out rather than always claiming it does.
             const rowBiasDetected = rowChiSquare > 9.488;   // df=4, p<0.05
             const colBiasDetected = colChiSquare > 14.067;  // df=7, p<0.05
 
-            let rowWeight = 0.3;
-            let colWeight = 0.2;
+            let rowWeight = 0.1;
+            let colWeight = 0.1;
 
             if (rowBiasDetected && colBiasDetected) {
                 rowWeight = 0.3;
@@ -6227,27 +6229,17 @@
                 }
             });
 
-            // Pairs that both repeat AND landed together recently count as part
-            // of the current pattern, so Anti-Pattern avoids them too. Built from
-            // getRecentDraws here rather than the service worker's correlation
-            // round-trip: that message may never land, and the strategy quietly
-            // returned different numbers depending on whether it had — the same
-            // dependency that made Wheeling behave as Hot.
-            const pairs = this.pairCounts(150);
-            const recentDraws = this.getRecentDraws(5);
-            const recentlyTogether = new Set();
-            for (const d of recentDraws) {
-                const u = [...new Set(d)].filter(n => n >= 1 && n <= this.numberCount).sort((a, b) => a - b);
-                for (let i = 0; i < u.length; i++) {
-                    for (let j = i + 1; j < u.length; j++) {
-                        if ((pairs[`${u[i]}-${u[j]}`] || 0) > 2) {
-                            recentlyTogether.add(u[i]);
-                            recentlyTogether.add(u[j]);
+            if (this.correlationData) {
+                [2, 3].forEach(size => {
+                    const C = this.correlationData.correlations?.[size] || {};
+                    const S = this.correlationData.betsSinceDrop?.[size] || {};
+                    Object.entries(C).forEach(([combo, c]) => {
+                        if ((S[combo] || 999) < 5 && c > 2) {
+                            combo.split('-').forEach(n => recentNumbers.add(parseInt(n)));
                         }
-                    }
-                }
+                    });
+                });
             }
-            recentlyTogether.forEach(n => recentNumbers.add(n));
 
             const antiNumbers = Array.from({ length: this.numberCount }, (_, i) => i + 1)
                 .filter(n => !recentNumbers.has(n));
@@ -6376,22 +6368,16 @@
 
             // Dynamic alpha: measure recent volatility (std dev of draw-set sizes over last 20 games)
             // High volatility → higher alpha (react faster), low volatility → lower alpha (smoother)
-            // kenoResults is NEWEST-first (background.js unshifts and sorts by
-            // timestamp descending), so the recent window is the head, not the tail.
-            const recentWindow = results.slice(0, 20);
+            const recentWindow = results.slice(-20);
             const sizes = recentWindow.map(r => r?.state?.drawnNumbers?.length || 0);
             const meanSize = sizes.reduce((a, b) => a + b, 0) / sizes.length;
             const variance = sizes.reduce((a, b) => a + Math.pow(b - meanSize, 2), 0) / sizes.length;
             const volatility = Math.sqrt(variance) / (meanSize || 1);
             const alpha = Math.min(0.30, Math.max(0.15, 0.20 + volatility * 0.5));
 
-            // Process oldest → newest so recent games carry the highest weight.
-            // The array is newest-first, so that means walking it BACKWARDS.
-            // Walking it forwards left ema = Σ α(1-α)^(T-t)·x_t with the oldest
-            // game as the last term — i.e. the single heaviest weight sat on the
-            // oldest draw in the session, exactly inverting the strategy.
+            // Process oldest → newest so recent games carry the highest weight
             const ema = new Array(this.numberCount).fill(0);
-            for (let i = results.length - 1; i >= 0; i--) {
+            for (let i = 0; i < results.length; i++) {
                 const drawn = results[i]?.state?.drawnNumbers;
                 if (!drawn) continue;
                 const drawnSet = new Set(drawn);
@@ -6435,39 +6421,43 @@
         // draw from, and the pool is ordered by overdue — the frequency signal
         // can no longer leak into the number-level choice.
         getDigitBiasNumbers(count = 9) {
-            const N = this.numberCount;
-            const ks = this.data.kenoStats;
-            const games = ks.analyzedGames || Math.min(ks.totalBets, 1000);
-            if (games < 30) return this.getHotNumbers(count);
-            const hot = ks.hotNumbers;
+            if (this.data.kenoStats.totalBets < 30) return this.getHotNumbers(count);
 
-            // group by last digit; families differ in size (40-grid: 4 each)
-            const fam = Array.from({ length: 10 }, () => ({ members: [], hits: 0 }));
-            for (let i = 0; i < N; i++) {
-                const d = (i + 1) % 10;
-                fam[d].members.push(i + 1);
-                fam[d].hits += hot[i];
+            const hot = this.data.kenoStats.hotNumbers;
+            const totalBets = this.data.kenoStats.totalBets;
+
+            // digit 0 → {10,20,30,40}, digit 1 → {1,11,21,31}, etc.
+            const digitTotals = new Array(10).fill(0);
+            for (let i = 0; i < this.numberCount; i++) {
+                digitTotals[(i + 1) % 10] += hot[i];
             }
-            const total = hot.reduce((a, b) => a + b, 0);
-            if (total <= 0) return this.getHotNumbers(count);
 
-            const scored = fam.map((f, d) => {
-                const share = f.members.length / N;
-                const exp = total * share;
-                const sd = Math.sqrt(Math.max(total * share * (1 - share), 1e-9));
-                return { d, members: f.members, z: (exp > 0 ? (f.hits - exp) / sd : 0) };
-            }).sort((a, b) => b.z - a.z);
+            // Expected: 4 numbers/digit × (20/40 draw rate) × totalBets = 2 × totalBets
+            const expectedPerDigit = totalBets * 2;
 
-            // only families genuinely running above their share are interesting
-            const strong = scored.filter(f => f.z >= 1);
-            const chosen = (strong.length ? strong : scored.slice(0, 2)).slice(0, 3);
-            this._lastDigitFamilies = chosen.map(f => `…${f.d}`).join(' ');
+            // Chi-square gate (df=9, p<0.05 = 16.919)
+            const chiSquare = digitTotals.reduce((sum, obs) =>
+                sum + Math.pow(obs - expectedPerDigit, 2) / expectedPerDigit, 0);
 
-            const pool = chosen.flatMap(f => f.members);
-            const ranked = this._byOverdue(pool);
-            if (ranked.length >= count) return ranked.slice(0, count).sort((a, b) => a - b);
-            const fill = this.getHotNumbers(count * 2).filter(n => !ranked.includes(n));
-            return [...ranked, ...fill].slice(0, count).sort((a, b) => a - b);
+            if (chiSquare < 16.919) {
+                return this.getHotNumbers(count);
+            }
+
+            // Signed z-score per digit
+            const digitBias = digitTotals.map((obs, d) => ({
+                d,
+                zscore: (obs - expectedPerDigit) / Math.max(Math.sqrt(expectedPerDigit), 1)
+            }));
+
+            return Array.from({ length: this.numberCount }, (_, i) => {
+                const digit = (i + 1) % 10;
+                const z = digitBias[digit].zscore;
+                const boost = 1 + Math.min(Math.max(z * 0.15, -0.4), 0.4);
+                return { n: i + 1, score: (hot[i] + 1) * boost };
+            })
+                .sort((a, b) => b.score - a.score)
+                .slice(0, count)
+                .map(x => x.n);
         }
         selectDigitBiasNumbers() {
             const numbers = this.getDigitBiasNumbers();
