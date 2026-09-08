@@ -292,7 +292,7 @@
             // Parity stayed in Core, Coverage never appeared in either grid, and
             // Alternative showed 15 because Parity was occupying a Core slot and so
             // got filtered out of the drawer set as well.
-            this.LAYOUT_VERSION = 6;
+            this.LAYOUT_VERSION = 7;
 
             const browserAPI = (typeof browser !== 'undefined' && browser?.storage) ? browser :
                 (typeof chrome !== 'undefined' && chrome?.storage) ? chrome : null;
@@ -2748,22 +2748,25 @@
                 { id: 'streak', name: 'Streak' },
                 { id: 'entropy', name: 'Entropy' },
 
-                // Row 3 - Where numbers sit, and what they have actually paid.
-                // Sector used to hold the second slot and was moved to Alternative:
-                // it reads the same row/column axis as Positional and falls back to
-                // getPositionalNumbers outright under 30 games or 20 draws, so on a
-                // young session the two tiles returned the same ticket. Realised
-                // replaces it as the only strategy on either grid that reads a
-                // different source -- your settled bets rather than the draws.
+                // Row 3 - Where numbers sit, and how their gaps behave.
+                // Realised held the second slot and moved to Alternative: it scores
+                // a number by the P/L of every bet that contained it, so a winning
+                // ticket credits all nine numbers equally whether they were drawn
+                // or not. Volatility takes the slot with a gap-shape read instead.
+                // Coverage moved out of the fourth for Poisson, which measures the
+                // same waiting time Coverage only approximates through heat.
                 { id: 'positional', name: 'Positional' },
-                { id: 'realised', name: 'Realised' },
+                { id: 'volatility', name: 'Volatility' },
                 { id: 'digitbias', name: 'Digit' },
-                { id: 'coverage', name: 'Coverage' },
+                { id: 'poisson', name: 'Poisson' },
 
-                // Row 4 - Statistical treatments, then the control.
+                // Row 4 - Statistical treatments, then the control. Anti-Cluster
+                // replaces Anti-Pattern here: both are contrarian, but Anti-Cluster
+                // builds its set from measured co-occurrence rather than excluding
+                // whatever happens to have come up lately.
                 { id: 'montecarlo', name: 'Monte Carlo' },
                 { id: 'variance', name: 'Variance' },
-                { id: 'antipattern', name: 'Anti-Pattern' },
+                { id: 'anticluster', name: 'Anti-Cluster' },
                 { id: 'random', name: 'Random' },
             ];
 
@@ -3067,6 +3070,7 @@
             { id: 'portfolio', name: 'Portfolio' },
             { id: 'wheeling', name: 'Wheeling' },
             { id: 'momentum', name: 'Momentum' },
+            { id: 'realised', name: 'Realised' },
             // Blends and meta — these compose other strategies by design
             { id: 'adaptive', name: 'Adaptive' },
             { id: 'edge', name: 'Edge' },
@@ -3077,11 +3081,10 @@
             { id: 'sector', name: 'Sector' },
             { id: 'hotzone', name: 'Hotzone' },
             // Contrarian / no measured signal
-            { id: 'anticluster', name: 'Anti-Cluster' },
             { id: 'balanced', name: 'Balanced' },
             { id: 'transition', name: 'Transition' },
-            { id: 'volatility', name: 'Volatility' },
-            { id: 'poisson', name: 'Poisson' }
+            { id: 'antipattern', name: 'Anti-Pattern' },
+            { id: 'coverage', name: 'Coverage' }
         ];
 
         populateSideDrawer() {
