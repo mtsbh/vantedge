@@ -45,9 +45,7 @@ It records every draw, builds a live heatmap, and runs 32 statistical strategies
 
 ## 🎰 Supported sites
 
-Stake (`.com / .us / .games / .bet`) · Rainbet · Roobet · Shuffle · BetFury · Winna · AceBet
-
-> The panel activates on each site's **Keno** and **Mines** pages, and mounts on SPA navigation (no reload needed).
+Stake (`.com / .us / .games / .bet`) · Rainbet · Roobet · Shuffle · BetFury · AceBet
 
 ---
 
@@ -99,8 +97,6 @@ Vantedge is an unpacked browser extension - `manifest.json` lives at the repo ro
 4. **Drag‑and‑drop** tiles to reorder either grid - Core and Alternative keep separate saved orders.
 5. Scroll down the panel for the **payout ladder**, **Smart Picker**, **Hot Number Groups**, and **combo history**. Switch the header to **Mines** for that game's own heatmap and pickers.
 6. Open the toolbar **popup** for the archival dashboard - Legend Stats, long‑range Mines statistics, backups, and Cloud Sync settings.
-
-> On some sites (e.g. Winna) synthetic clicks are rejected, so Vantedge **highlights** the numbers for you to tap manually instead of auto‑clicking. In Mines it only ever *marks* tiles - revealing one is a real bet, so that click stays yours.
 
 ---
 
@@ -175,7 +171,7 @@ All 32 strategies read the same per‑site draw history and return a ticket at t
 <thead><tr><th width="52"></th><th width="140">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
 <tbody>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/positional.svg"><img src="docs/icons/light/positional.svg" width="20" height="20" alt=""></picture></td><td><b>Positional</b></td><td>Grid chi-square</td><td>Row/column bias on the 8×5 board (p&lt;0.05), measured over the whole session</td></tr>
-<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/volatility.svg"><img src="docs/icons/light/volatility.svg" width="20" height="20" alt=""></picture></td><td><b>Volatility</b></td><td>Gap coefficient of variation</td><td>Numbers that arrive in bursts and lulls rather than at a steady pace - the exact mirror of Entropy</td></tr>
+<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/volatility.svg"><img src="docs/icons/light/volatility.svg" width="20" height="20" alt=""></picture></td><td><b>Volatility</b></td><td>Gap coefficient of variation</td><td>Numbers that arrive in bursts and lulls rather than at a steady pace</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/digitbias.svg"><img src="docs/icons/light/digitbias.svg" width="20" height="20" alt=""></picture></td><td><b>Digit</b></td><td>Last-digit chi-square</td><td>Tests whether numbers ending 0-9 are drawn at unequal rates; a chi-square gate (p&lt;0.05, df=9) has to clear before the digit z-scores boost each number's heat</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/poisson.svg"><img src="docs/icons/light/poisson.svg" width="20" height="20" alt=""></picture></td><td><b>Poisson</b></td><td>Survival probability</td><td>Models each gap as a Poisson process (λ = mean gap) and ranks by how improbable a gap this long would be. The most statistically grounded overdue read (30+ games)</td></tr>
 </tbody>
@@ -187,15 +183,13 @@ All 32 strategies read the same per‑site draw history and return a ticket at t
 <thead><tr><th width="52"></th><th width="140">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
 <tbody>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/montecarlo.svg"><img src="docs/icons/light/montecarlo.svg" width="20" height="20" alt=""></picture></td><td><b>Monte Carlo</b></td><td>200-sim weighted sampling</td><td>Simulates draws weighted by hit counts - Hot with deliberate jitter, so you don't play the identical ticket every round</td></tr>
-<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/variance.svg"><img src="docs/icons/light/variance.svg" width="20" height="20" alt=""></picture></td><td><b>Variance</b></td><td>Chi-square / z-score</td><td>Ranks by deviation from the 0.5/game expectation, chi-square under 50 bets and z-score above it, taking the upper tail - so on any board it returns the same ordering as Hot</td></tr>
+<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/variance.svg"><img src="docs/icons/light/variance.svg" width="20" height="20" alt=""></picture></td><td><b>Variance</b></td><td>Chi-square / z-score</td><td>Ranks by deviation from the 0.5/game expectation, chi-square under 50 bets and z-score above it, taking the upper tail</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/anticluster.svg"><img src="docs/icons/light/anticluster.svg" width="20" height="20" alt=""></picture></td><td><b>Anti-Cluster</b></td><td>Minimum co-occurrence</td><td>The mirror of Wheeling - builds a set of numbers that have <i>avoided</i> each other, spreading the ticket across independent draws</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/random.svg"><img src="docs/icons/light/random.svg" width="20" height="20" alt=""></picture></td><td><b>Random</b></td><td>Uniform</td><td>Pure random baseline - the control you're comparing everything against</td></tr>
 </tbody>
 </table>
 
 ### Alternative grid
-
-The other sixteen, reachable through the **Alternative** toggle. Repeat, Portfolio, Wheeling, Momentum and Successor earned a Core slot on signal alone and only missed out because Core is full - Successor is the only strategy on either grid conditioned on the previous draw, so its ticket changes every round by construction. Adaptive, Edge, Regime and Bayesian compose other strategies by design, so they are never marked as handing off. Drought, Hotzone, Cycle and Runs need a specific condition before they say anything, and hand back to Hot when it is absent - on a fair board that is most of the time, which is the gate working rather than the strategy failing. The rest are contrarian reads that showed no measured signal.
 
 <table>
 <thead><tr><th width="52"></th><th width="150">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
@@ -210,7 +204,7 @@ The other sixteen, reachable through the **Alternative** toggle. Repeat, Portfol
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/regime.svg"><img src="docs/icons/light/regime.svg" width="20" height="20" alt=""></picture></td><td><b>Regime</b></td><td>CUSUM change-point detection</td><td>Detects a shift into a hot or cold distributional regime and switches blends accordingly (40+ games)</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/bayesian.svg"><img src="docs/icons/light/bayesian.svg" width="20" height="20" alt=""></picture></td><td><b>Bayesian</b></td><td>Dynamic posterior</td><td>Per-number hit-probability posterior, updated after every draw</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/drought.svg"><img src="docs/icons/light/drought.svg" width="20" height="20" alt=""></picture></td><td><b>Drought</b></td><td>Rate vs its own pace</td><td>Numbers whose recent rate has fallen furthest below <b>their own</b> session pace - a number can run hot all session and still be in a personal drought</td></tr>
-<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/hotzone.svg"><img src="docs/icons/light/hotzone.svg" width="20" height="20" alt=""></picture></td><td><b>Hotzone</b></td><td>2-D block z-score → gap</td><td>Scans 2×2 and larger blocks for local bias (z &gt; 2.5), then picks the most overdue numbers inside them - hands back to Hot when nothing stands out</td></tr>
+<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/hotzone.svg"><img src="docs/icons/light/hotzone.svg" width="20" height="20" alt=""></picture></td><td><b>Hotzone</b></td><td>2-D block z-score → gap</td><td>Scans 2×2 and larger blocks for local bias (z &gt; 2.5), then picks the most overdue numbers inside them</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/cycle.svg"><img src="docs/icons/light/cycle.svg" width="20" height="20" alt=""></picture></td><td><b>Cycle</b></td><td>Autocorrelation, lags 2-20</td><td>Rhythm rather than rate: the strongest autocorrelation in each number's hit series, kept only if it clears a Šidák-corrected Bartlett band, and played only while the cycle points at this game (200+ draws)</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/runs.svg"><img src="docs/icons/light/runs.svg" width="20" height="20" alt=""></picture></td><td><b>Runs</b></td><td>Wald-Wolfowitz</td><td>Counts runs in each number's hit/miss sequence against the exact distribution-free null. A strongly negative z means hits arrive in bunches; those are played while still inside one. Volatility measures how spread out the gaps are, this measures how they are <i>arranged</i></td></tr>
 
@@ -233,53 +227,6 @@ the **spots** control overrides both and suspends the alternation.
 repo, every spot count at every risk level returns **98.65-99.07%**. What changes is
 the shape: a 3-pick on High wins once in 82 rounds (SD 8.9); a 3-pick on Classic
 wins 59% of the time (SD 1.4). Same edge, thirty-fold difference in swing.
-
-What the second click buys is concentration rather than edge - fewer numbers, all
-of them ones the strategy actually ranked, instead of a tail padded out from Hot.
-The sizes themselves were settled by the owner after four independent reviews of
-the strategy code disagreed with each other, their proposals for Hot alone ranging
-from 3 to 10. That disagreement is the honest summary of the evidence: no count is
-worth more than another, so the choice is which session you want to sit through.
-
-### A note on the significance gates
-
-Five strategies gate on a significance test: Hotzone, Positional, Digit, Cycle and
-Runs. Each was measured against simulated fair boards rather than assumed, because
-the obvious reading of a gate is usually wrong in one direction or the other.
-
-**Hotzone is correctly calibrated, by accident.** It scans 28 overlapping 2x2
-blocks and takes the largest z, which should inflate false positives badly - a
-maximum over 28 correlated tests is not one test. But it divides by
-`sqrt(expected)`, a Poisson standard deviation that is too large for draws made
-without replacement, which deflates every z. The two errors very nearly cancel:
-on a fair board the gate fires **3.4-4.9%** of the time, close to the nominal 5%.
-Correcting the standard deviation alone would take that to **14-17%**, so the
-apparent bug is load-bearing and should be left alone.
-
-**Positional is a spatial-weighting picker, not a bias detector.** Its chi-square
-uses expected counts of `totalBets * 4` and `* 2.5`, but a row of 8 numbers expects
-8 x (10/40) = 2 hits per game and a column of 5 expects 1.25, so both are exactly
-twice the truth. That puts chi-square near 500 against a critical value of 9.488,
-so both gates fire on **100% of boards** and the row/column weighting is permanently
-on. This was corrected once and then deliberately put back: always-on is the
-behaviour the strategy has always had, and the corrected version fires on only 2.7%
-of boards, which would leave it returning Hot's ranking almost always - a different
-strategy under the same name. Read the tile as "Hot, weighted by grid position",
-not as a bias test that passed.
-
-**Digit, Cycle and Runs gate honestly and therefore stay quiet.** Digit needs a
-chi-square over 16.919 (df=9) across the ten last-digit families; Cycle needs an
-autocorrelation clearing a Bartlett band widened by a Sidak correction over the 19
-lags it tests; Runs needs a Wald-Wolfowitz z below -1. On a fair board Cycle hands
-back to Hot in about two thirds of sessions and Runs in about one in ten, measured
-over 60 simulated sessions of 300 draws. That is the gate working, not the strategy
-failing - but it does mean those tiles often show you Hot's ticket.
-
-None of this is a reason to distrust a pick - a conservative test is a safe way to
-fail, and a gated strategy hands back to Hot when nothing clears. But "gated" means
-the test was run, not that a bias was verified.
-
-> **Hand‑offs are visible.** Most strategies fall back to Hot or Smart while data is thin. Rather than pretend otherwise, Vantedge traces each strategy's internal calls and marks a tile when a clear majority of its ticket came from somewhere else - so clicking Poisson at 18 bets tells you it's really Hot's pick.
 
 ---
 
