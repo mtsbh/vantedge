@@ -153,7 +153,7 @@ All 32 strategies read the same per‑site draw history and return a ticket at t
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/hot.svg"><img src="docs/icons/light/hot.svg" width="20" height="20" alt=""></picture></td><td><b>Hot</b></td><td>Frequency</td><td>Most-drawn numbers across all recorded games</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/cold.svg"><img src="docs/icons/light/cold.svg" width="20" height="20" alt=""></picture></td><td><b>Cold</b></td><td>Inverse frequency</td><td>Least-drawn - mean-reversion</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/smart.svg"><img src="docs/icons/light/smart.svg" width="20" height="20" alt=""></picture></td><td><b>Smart</b></td><td>Dynamic percentile zoning</td><td>Top 25% / middle 50% / bottom 25% zones with randomized sampling</td></tr>
-<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/ema.svg"><img src="docs/icons/light/ema.svg" width="20" height="20" alt=""></picture></td><td><b>EMA</b></td><td>Exponential moving average</td><td>Recency-weighted frequency; alpha adapts 0.15–0.30 with recent volatility, so it turns faster than Hot when a session shifts</td></tr>
+<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/ema.svg"><img src="docs/icons/light/ema.svg" width="20" height="20" alt=""></picture></td><td><b>EMA</b></td><td>Exponential moving average</td><td>Weighted frequency with an alpha that adapts 0.15-0.30 with how volatile the sampled draws are. It samples the <i>oldest</i> 20 draws for that alpha and gives the heaviest weight to the oldest game, so it turns slowly rather than faster than Hot</td></tr>
 </tbody>
 </table>
 
@@ -187,7 +187,7 @@ All 32 strategies read the same per‑site draw history and return a ticket at t
 <thead><tr><th width="52"></th><th width="140">Strategy</th><th>Method</th><th>Idea</th></tr></thead>
 <tbody>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/montecarlo.svg"><img src="docs/icons/light/montecarlo.svg" width="20" height="20" alt=""></picture></td><td><b>Monte Carlo</b></td><td>200-sim weighted sampling</td><td>Simulates draws weighted by hit counts - Hot with deliberate jitter, so you don't play the identical ticket every round</td></tr>
-<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/variance.svg"><img src="docs/icons/light/variance.svg" width="20" height="20" alt=""></picture></td><td><b>Variance</b></td><td>Chi-square / z-score</td><td>Numbers whose all-time count deviates most from the 0.5/game expectation - chi-square under 50 bets, z-score above it</td></tr>
+<tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/variance.svg"><img src="docs/icons/light/variance.svg" width="20" height="20" alt=""></picture></td><td><b>Variance</b></td><td>Chi-square / z-score</td><td>Ranks by deviation from the 0.5/game expectation, chi-square under 50 bets and z-score above it, taking the upper tail - so on any board it returns the same ordering as Hot</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/anticluster.svg"><img src="docs/icons/light/anticluster.svg" width="20" height="20" alt=""></picture></td><td><b>Anti-Cluster</b></td><td>Minimum co-occurrence</td><td>The mirror of Wheeling - builds a set of numbers that have <i>avoided</i> each other, spreading the ticket across independent draws</td></tr>
 <tr><td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/icons/dark/random.svg"><img src="docs/icons/light/random.svg" width="20" height="20" alt=""></picture></td><td><b>Random</b></td><td>Uniform</td><td>Pure random baseline - the control you're comparing everything against</td></tr>
 </tbody>
@@ -243,8 +243,9 @@ worth more than another, so the choice is which session you want to sit through.
 
 ### A note on the significance gates
 
-Two strategies gate on a significance test. Both were measured against simulated
-fair boards rather than assumed, because the obvious reading of each is wrong.
+Five strategies gate on a significance test: Hotzone, Positional, Digit, Cycle and
+Runs. Each was measured against simulated fair boards rather than assumed, because
+the obvious reading of a gate is usually wrong in one direction or the other.
 
 **Hotzone is correctly calibrated, by accident.** It scans 28 overlapping 2x2
 blocks and takes the largest z, which should inflate false positives badly - a
@@ -256,19 +257,27 @@ Correcting the standard deviation alone would take that to **14-17%**, so the
 apparent bug is load-bearing and should be left alone.
 
 **Positional is a spatial-weighting picker, not a bias detector.** Its chi-square
-used expected counts of `totalBets * 4` and `* 2.5`; a row of 8 numbers expects
-8 x (10/40) = 2 hits per game and a column of 5 expects 1.25, so both were exactly
-twice the truth. That put chi-square near 500 against a critical value of 9.488, so
-both gates fired on **100% of boards** and the row/column weighting was permanently
-on. The expectations are now correct, but the weighting stays on by default,
-because always-on is the behaviour this strategy has always had - switching it to
-fire on 2.7% of boards would leave it returning Hot's ranking almost always, which
-is a different strategy under the same name. The gate now only adds emphasis when
-one axis genuinely stands out.
+uses expected counts of `totalBets * 4` and `* 2.5`, but a row of 8 numbers expects
+8 x (10/40) = 2 hits per game and a column of 5 expects 1.25, so both are exactly
+twice the truth. That puts chi-square near 500 against a critical value of 9.488,
+so both gates fire on **100% of boards** and the row/column weighting is permanently
+on. This was corrected once and then deliberately put back: always-on is the
+behaviour the strategy has always had, and the corrected version fires on only 2.7%
+of boards, which would leave it returning Hot's ranking almost always - a different
+strategy under the same name. Read the tile as "Hot, weighted by grid position",
+not as a bias test that passed.
 
-Neither is a reason to distrust a pick - a conservative test is a safe way to fail,
-and Hotzone hands back to Hot when its gate does not clear. But "gated" means the
-test was run, not that a bias was verified.
+**Digit, Cycle and Runs gate honestly and therefore stay quiet.** Digit needs a
+chi-square over 16.919 (df=9) across the ten last-digit families; Cycle needs an
+autocorrelation clearing a Bartlett band widened by a Sidak correction over the 19
+lags it tests; Runs needs a Wald-Wolfowitz z below -1. On a fair board Cycle hands
+back to Hot in about two thirds of sessions and Runs in about one in ten, measured
+over 60 simulated sessions of 300 draws. That is the gate working, not the strategy
+failing - but it does mean those tiles often show you Hot's ticket.
+
+None of this is a reason to distrust a pick - a conservative test is a safe way to
+fail, and a gated strategy hands back to Hot when nothing clears. But "gated" means
+the test was run, not that a bias was verified.
 
 > **Hand‑offs are visible.** Most strategies fall back to Hot or Smart while data is thin. Rather than pretend otherwise, Vantedge traces each strategy's internal calls and marks a tile when a clear majority of its ticket came from somewhere else - so clicking Poisson at 18 bets tells you it's really Hot's pick.
 
