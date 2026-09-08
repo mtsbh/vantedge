@@ -41,9 +41,7 @@
     // count. Renames map to their successor; strategies that were removed
     // outright map to null and are dropped rather than misattributed.
     const STRATEGY_ALIASES = {
-        cohesion: 'sector',        // Cohesion became Sector Rotation
         timeseries: 'drought',     // Forecast became Drought Rebound
-        condbonus: 'realised',     // Pulse became Realised Return
         comboways: 'anticluster',  // Cluster became Anti-Cluster
         gapextremes: 'repeat',     // Extreme became Repeat Chaser
         gap: 'overdue',            // early name for the gap read
@@ -55,7 +53,11 @@
         predict: 'smart',
         // removed with no successor — counted, but not credited to anyone
         ensemble: null, mix: null, kelly: null, spectral: null, manual: null,
-        delta: null, regression: null, parity: null
+        delta: null, regression: null, parity: null,
+        // Sector duplicated Positional, Coverage duplicated Hot, and Realised
+        // credited every number on a winning ticket whether it was drawn or not.
+        // Their history is counted but credited to nobody, as with the rest here.
+        sector: null, cohesion: null, coverage: null, realised: null, condbonus: null
     };
     function canonicalStrategyId(id) {
         if (!id) return null;
@@ -119,12 +121,12 @@
     const STRATEGY_SPOTS = {
         hot: [9, 7], cold: [9, 6], smart: [10], ema: [8, 6],
         overdue: [9, 5], progressive: [8, 5], streak: [8, 5], entropy: [9, 4],
-        positional: [9, 8], sector: [10], digitbias: [8], coverage: [10],
+        positional: [9, 8], digitbias: [8], successor: [9],
         montecarlo: [9], variance: [9, 5], antipattern: [8, 6], random: [9],
         repeat: [6], portfolio: [8], wheeling: [6], momentum: [8, 5],
         adaptive: [9, 6], edge: [8, 5], regime: [8, 4], bayesian: [9, 5],
-        drought: [8], realised: [6], hotzone: [8], anticluster: [10, 6],
-        balanced: [8], transition: [8, 6], volatility: [7], poisson: [9]
+        drought: [8], cycle: [9], hotzone: [8], anticluster: [10, 6],
+        balanced: [8], transition: [8, 6], volatility: [7], poisson: [9], runs: [9]
     };
 
     // Stake keno pay tables, 1-40 board with 10 drawn. multiplier[risk][picks][hits].
@@ -292,7 +294,7 @@
             // Parity stayed in Core, Coverage never appeared in either grid, and
             // Alternative showed 15 because Parity was occupying a Core slot and so
             // got filtered out of the drawer set as well.
-            this.LAYOUT_VERSION = 6;
+            this.LAYOUT_VERSION = 8;
 
             const browserAPI = (typeof browser !== 'undefined' && browser?.storage) ? browser :
                 (typeof chrome !== 'undefined' && chrome?.storage) ? chrome : null;
@@ -376,20 +378,20 @@
                 adaptive: { name: "Adaptive", method: "Session Meta-Strategy", description: "Queries AI performance scores and blends the top 2 recommended strategies weighted by their recent win rates. Dynamically updates as session patterns shift.", usage: "Best for: Any session length. The strategy that picks your strategy." },
                 regime: { name: "Regime", method: "CUSUM Change-Point Detection", description: "Uses CUSUM algorithm to detect if the session has shifted into a hot or cold distributional regime. Switches between Hot-biased and Cold-biased blends automatically based on detected regime.", usage: "Best for: Long sessions (40+ games) where RNG drift is expected." },
                 // New strategies
-                sector: { name: "Sector", method: "Recent Row/Column Bias", description: "Scores every row and column over the last ~60 draws against its expected share, takes the two strongest, and picks the most overdue numbers inside them. Positional reads the whole session, so it cannot see a bias that started recently.", usage: "Best for: A board where one band has started running hot." },
                 edge: { name: "Edge", method: "Kelly-Inspired Meta", description: "Kelly-inspired: scores each strategy by its realised profit per unit staked this session, shrunk toward zero by how many rounds it has actually run, then blends the top few weighted by that edge. Falls back to a fixed slate while nothing has shown an edge yet.", usage: "Best for: Leaning on whatever has actually been paying in THIS session." },
                 // User-pasted strategies (2026-05-13)
                 portfolio: { name: "Portfolio", method: "Sharpe-Style Heat/Risk", description: "Heat ÷ entropy as a Sharpe-like ratio. Favors numbers with strong heat AND low variance in their interval pattern.", usage: "Best for: Variance reduction. Doesn't change EV." },
                 anticluster: { name: "Anti-Cluster", method: "Minimum Co-Occurrence", description: "The mirror of Wheeling: greedily builds a set of numbers that have AVOIDED each other in your draws, spreading the ticket across independent draws instead of stacking it on one cluster.", usage: "Best for: More chances at a small hit rather than one big simultaneous one." },
-                realised: { name: "Realised", method: "Return per Unit Staked", description: "Reads your BET history rather than the draws: for every number, the money your paid bets containing it actually returned per unit staked, shrunk toward break-even so one lucky bet cannot top the table. Needs 10+ paid bets.", usage: "Best for: Leaning on what has actually paid you, not what has merely been drawn." },
                 // Re-added historical strategies
                 bayesian: { name: "Bayesian", method: "Dynamic Posterior Update", description: "Maintains a Bayesian posterior for each number's hit probability, updating after every draw. Selects numbers with the highest posterior-weighted scores.", usage: "Best for: Statistically grounded probability estimates that sharpen with more data." },
                 montecarlo: { name: "MonteCarlo", method: "200-Sim Weighted Sampling", description: "Runs up to 200 simulations of a draw, sampling without replacement weighted by each number's hit count, and takes the numbers that come up most often. Since the weights are the hit counts, this is Hot with sampling noise on top — the jitter is the point, not a separate signal.", usage: "Best for: Playing the hot end of the board without picking the identical ticket every time." },
-                coverage: { name: "Coverage", method: "Hot + Max-Spread Hybrid", description: "Selects top hot numbers plus additional numbers that maximize coverage of the board, combining frequency bias with spatial spread.", usage: "Best for: Maximizing partial hits by covering both hot zones and gaps." },
                 wheeling: { name: "Wheeling", method: "Correlation-Based Expansion", description: "Seeds from the hottest number then expands by finding its most correlated partners — numbers that frequently appear together.", usage: "Best for: Any site — the pair counts come from your own recent draws. Builds a synergistic set." },
                 drought: { name: "Drought", method: "Rate vs Its Own Pace", description: "Numbers whose recent rate has fallen furthest below THEIR OWN session pace — not below the flat expectation. A number can run hot all session and still be in a personal drought right now.", usage: "Best for: A dip in a number that has otherwise been good to you." },
                 balanced: { name: "Balanced", method: "Zone-Based Coverage", description: "Splits the board into four equal zones and takes an equal share from each, picking inside a zone the numbers sitting CLOSEST to the expected hit count — the unremarkable ones, not the hot or cold tails.", usage: "Best for: Spreading a ticket evenly and deliberately avoiding both tails." },
                 momentum: { name: "Momentum", method: "Recent-Interval Acceleration", description: "Scores each number by comparing its recent gap intervals to its long-term average. Numbers appearing faster than usual get high momentum scores.", usage: "Best for: Spotting numbers whose appearance rate is currently accelerating." },
+                successor: { name: "Successor", method: "Lag-1 Markov, Off-Diagonal", description: "Conditions on the numbers drawn in the LAST game and plays the ones that have most often followed them, measured against each candidate's own rate rather than against chance so the score is a conditional lift and not heat in disguise. Needs 150+ draws.", usage: "Best for: A board where what comes up next depends on what just came up." },
+                cycle: { name: "Cycle", method: "Autocorrelation, Lags 2-20", description: "Looks for a rhythm rather than a rate: the strongest autocorrelation in each number's hit series at lags 2 to 20, kept only if it clears a Sidak-corrected Bartlett band, and played only while the cycle points at this game. Needs 200+ draws.", usage: "Best for: A board where numbers arrive on a period rather than at random." },
+                runs: { name: "Runs", method: "Wald-Wolfowitz", description: "Counts runs in each number's hit/miss sequence against the exact distribution-free null. A strongly negative z means the hits arrive in bunches; those numbers are played while still inside a bunch. Volatility measures how spread out the gaps are, this measures how they are arranged.", usage: "Best for: A board where hits cluster in time instead of scattering." },
                 poisson: { name: "Poisson", method: "Poisson Survival Probability", description: "Models each number's gap as a Poisson process, with λ its mean gap over the whole session (games ÷ hits). Scores by survival probability — the chance a gap this long would happen at that rate, so the most improbably overdue numbers rank highest.", usage: "Best for: 30+ games. The most statistically grounded gap strategy." },
                 repeat: { name: "Repeat", method: "Lag-1 Autocorrelation", description: "Given a number was drawn, how often it was drawn again in the very next game, against the 0.25 chance rate and shrunk toward it. The only strategy that reads draw ORDER — every other one treats the session as an unordered pile of counts.", usage: "Best for: Boards where numbers come in back-to-back runs." }
             };
@@ -2679,20 +2681,20 @@
                 digitbias: '<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>',
                 adaptive: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
                 regime: '<path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z"/>',
-                sector: '<path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/>',
                 edge: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
                 portfolio: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>',
                 anticluster: '<line x1="7" y1="7" x2="16" y2="9"/><line x1="7" y1="7" x2="9" y2="16"/><line x1="16" y1="9" x2="17" y2="17"/><line x1="9" y1="16" x2="17" y2="17"/><circle cx="7" cy="7" r="2.2"/><circle cx="16" cy="9" r="2.2"/><circle cx="9" cy="16" r="2.2"/><circle cx="17" cy="17" r="2.2"/>',
-                realised: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><line x1="6" y1="10" x2="6" y2="14"/><line x1="18" y1="10" x2="18" y2="14"/>',
                 bayesian: '<path d="M4 4h16"/><path d="m4 4 8 8-8 8h16"/>',
                 montecarlo: '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1"/><circle cx="15.5" cy="8.5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="8.5" cy="15.5" r="1"/><circle cx="15.5" cy="15.5" r="1"/>',
-                coverage: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
                 wheeling: '<circle cx="12" cy="12" r="9"/><line x1="12" y1="3" x2="12" y2="21"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/><line x1="18.4" y1="5.6" x2="5.6" y2="18.4"/>',
                 drought: '<polyline points="3 18 8 13 12 16 21 6"/><circle cx="8" cy="13" r="1"/><circle cx="12" cy="16" r="1"/>',
                 balanced: '<path d="M12 3v18"/><path d="M5 7h14"/><path d="M5 7 2 13a3 3 0 0 0 6 0z"/><path d="M19 7l-3 6a3 3 0 0 0 6 0z"/><path d="M8 21h8"/>',
                 momentum: '<path d="M9.59 4.59A2 2 0 1 1 11 8H2"/><path d="M17 12a2 2 0 1 0 2 2H2"/><path d="M14.83 19.41A2 2 0 1 0 16 23H2"/>',
                 poisson: '<path d="M6.5 12c.94-3.46 4.94-6 8.5-6 3.56 0 6.06 2.54 7 6-.94 3.47-3.44 6-7 6s-7.56-2.53-8.5-6z"/><circle cx="16" cy="10" r="1"/><path d="M2 12s2 2 4 2"/>',
-                repeat: '<polyline points="8 7 3 12 8 17"/><polyline points="16 7 21 12 16 17"/><line x1="3" y1="12" x2="21" y2="12"/>'
+                repeat: '<polyline points="8 7 3 12 8 17"/><polyline points="16 7 21 12 16 17"/><line x1="3" y1="12" x2="21" y2="12"/>',
+                successor: '<circle cx="5" cy="12" r="2.4"/><circle cx="19" cy="12" r="2.4"/><line x1="8" y1="12" x2="15" y2="12"/><polyline points="13 9 16 12 13 15"/>',
+                cycle: '<path d="M3 12a9 9 0 1 1 3 6.7"/><polyline points="3 13 3 19 9 19"/><circle cx="12" cy="12" r="2"/>',
+                runs: '<line x1="3" y1="16" x2="21" y2="16"/><rect x="4" y="9" width="2.6" height="5"/><rect x="7.6" y="9" width="2.6" height="5"/><rect x="11.2" y="9" width="2.6" height="5"/><rect x="17.4" y="9" width="2.6" height="5"/>'
             };
             const inner = P[strategyId] || '<path d="M13 2 3 14h7v8l10-12h-7z"/>';
             return `<svg class="vx-strat-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
@@ -2748,22 +2750,25 @@
                 { id: 'streak', name: 'Streak' },
                 { id: 'entropy', name: 'Entropy' },
 
-                // Row 3 - Where numbers sit, and what they have actually paid.
-                // Sector used to hold the second slot and was moved to Alternative:
-                // it reads the same row/column axis as Positional and falls back to
-                // getPositionalNumbers outright under 30 games or 20 draws, so on a
-                // young session the two tiles returned the same ticket. Realised
-                // replaces it as the only strategy on either grid that reads a
-                // different source -- your settled bets rather than the draws.
+                // Row 3 - Where numbers sit, and how their gaps behave.
+                // Realised held the second slot and moved to Alternative: it scores
+                // a number by the P/L of every bet that contained it, so a winning
+                // ticket credits all nine numbers equally whether they were drawn
+                // or not. Volatility takes the slot with a gap-shape read instead.
+                // Coverage moved out of the fourth for Poisson, which measures the
+                // same waiting time Coverage only approximates through heat.
                 { id: 'positional', name: 'Positional' },
-                { id: 'realised', name: 'Realised' },
+                { id: 'volatility', name: 'Volatility' },
                 { id: 'digitbias', name: 'Digit' },
-                { id: 'coverage', name: 'Coverage' },
+                { id: 'poisson', name: 'Poisson' },
 
-                // Row 4 - Statistical treatments, then the control.
+                // Row 4 - Statistical treatments, then the control. Anti-Cluster
+                // replaces Anti-Pattern here: both are contrarian, but Anti-Cluster
+                // builds its set from measured co-occurrence rather than excluding
+                // whatever happens to have come up lately.
                 { id: 'montecarlo', name: 'Monte Carlo' },
                 { id: 'variance', name: 'Variance' },
-                { id: 'antipattern', name: 'Anti-Pattern' },
+                { id: 'anticluster', name: 'Anti-Cluster' },
                 { id: 'random', name: 'Random' },
             ];
 
@@ -3067,6 +3072,7 @@
             { id: 'portfolio', name: 'Portfolio' },
             { id: 'wheeling', name: 'Wheeling' },
             { id: 'momentum', name: 'Momentum' },
+            { id: 'successor', name: 'Successor' },
             // Blends and meta — these compose other strategies by design
             { id: 'adaptive', name: 'Adaptive' },
             { id: 'edge', name: 'Edge' },
@@ -3074,14 +3080,13 @@
             { id: 'bayesian', name: 'Bayesian' },
             // Situational — need a specific condition to say anything
             { id: 'drought', name: 'Drought' },
-            { id: 'sector', name: 'Sector' },
             { id: 'hotzone', name: 'Hotzone' },
+            { id: 'cycle', name: 'Cycle' },
+            { id: 'runs', name: 'Runs' },
             // Contrarian / no measured signal
-            { id: 'anticluster', name: 'Anti-Cluster' },
             { id: 'balanced', name: 'Balanced' },
             { id: 'transition', name: 'Transition' },
-            { id: 'volatility', name: 'Volatility' },
-            { id: 'poisson', name: 'Poisson' }
+            { id: 'antipattern', name: 'Anti-Pattern' }
         ];
 
         populateSideDrawer() {
@@ -3192,6 +3197,9 @@
                 'cold': 'selectColdNumbers',
                 'smart': 'selectSmartNumbers',
                 'random': 'selectRandomNumbers',
+                'successor': 'selectSuccessorNumbers',
+                'cycle': 'selectCycleNumbers',
+                'runs': 'selectRunsNumbers',
                 'overdue': 'selectOverdueNumbers',
                 'variance': 'selectVarianceNumbers',
                 'positional': 'selectPositionalNumbers',
@@ -3206,15 +3214,12 @@
                 'digitbias': 'selectDigitBiasNumbers',
                 'adaptive': 'selectAdaptiveNumbers',
                 'regime': 'selectRegimeNumbers',
-                'sector': 'selectSectorRotationNumbers',
                 'edge': 'selectEdgeNumbers',
                 'portfolio': 'selectPortfolioNumbers',
                 'anticluster': 'selectAntiClusterNumbers',
-                'realised': 'selectRealisedReturnNumbers',
                 // Re-added historical strategies
                 'bayesian': 'selectBayesianNumbers',
                 'montecarlo': 'selectMonteCarloNumbers',
-                'coverage': 'selectCoverageNumbers',
                 'wheeling': 'selectWheelingNumbers',
                 'drought': 'selectDroughtReboundNumbers',
                 'balanced': 'selectBalancedNumbers',
@@ -6537,29 +6542,6 @@
             this.animateSequentialSelection(numbers);
         }
 
-        // --- Strategy: Coverage (Hot + Maximum Spread) ---
-        getCoverageNumbers(count = 9) {
-            if (this.data.kenoStats.totalBets < 20) return this.getSmartNumbers(count);
-            const candidates = this.data.kenoStats.hotNumbers
-                .map((o, i) => ({ n: i + 1, heat: o }))
-                .sort((a, b) => b.heat - a.heat)
-                .slice(0, count * 2);
-            const selected = [candidates.shift().n];
-            while (selected.length < count && candidates.length > 0) {
-                candidates.sort((a, b) => {
-                    const minDistA = Math.min(...selected.map(s => Math.abs(s - a.n)));
-                    const minDistB = Math.min(...selected.map(s => Math.abs(s - b.n)));
-                    return (minDistB * b.heat) - (minDistA * a.heat);
-                });
-                selected.push(candidates.shift().n);
-            }
-            return selected;
-        }
-        selectCoverageNumbers() {
-            const numbers = this.getCoverageNumbers();
-            this.animateSequentialSelection(numbers);
-        }
-
         // --- Strategy: Wheeling (Correlation-Based Way Tickets) ---
         // Pair counts over the recent draws, keyed "lo-hi". Built here rather than
         // waiting on the service worker's correlation round-trip: Wheeling used to
@@ -6824,7 +6806,7 @@
                 });
         }
 
-        // getHotNumbers -> 'hot', getSectorRotationNumbers -> 'sector'…
+        // getHotNumbers -> 'hot', getRepeatChaserNumbers -> 'repeat'…
         strategyIdForGetter(getterName) {
             const stripped = getterName.replace(/^get/, '').replace(/Numbers$/, '');
             const map = safe(() => this.selectMethodMap()) || {};
@@ -7008,11 +6990,12 @@
                 digitbias: (c) => this.getDigitBiasNumbers(c),
                 antipattern: (c) => this.getAntiPatternNumbers(c),
                 regime: (c) => this.getRegimeNumbers(c),
-                sector: (c) => this.getSectorRotationNumbers(c),
                 repeat: (c) => this.getRepeatChaserNumbers(c),
                 drought: (c) => this.getDroughtReboundNumbers(c),
                 anticluster: (c) => this.getAntiClusterNumbers(c),
-                realised: (c) => this.getRealisedReturnNumbers(c)
+                successor: (c) => this.getSuccessorNumbers(c),
+                cycle: (c) => this.getCycleNumbers(c),
+                runs: (c) => this.getRunsNumbers(c)
             };
 
             // Diverse complement pairs — primary drives, secondary diversifies
@@ -7032,11 +7015,12 @@
                 smart: ['positional', 'ema'],
                 regime: ['hot', 'overdue'],
                 digitbias: ['hot', 'positional'],
-                sector: ['overdue', 'hot'],
                 repeat: ['hot', 'streak'],
                 drought: ['overdue', 'cold'],
-                anticluster: ['coverage', 'cold'],
-                realised: ['hot', 'overdue']
+                anticluster: ['balanced', 'cold'],
+                successor: ['repeat', 'hot'],
+                cycle: ['overdue', 'ema'],
+                runs: ['streak', 'hot']
             };
 
             // Build legend-based strategy bias: strategies with more big hits get a weight bonus
@@ -7297,65 +7281,6 @@
         }
 
 
-        // TAG: NEW-STRATEGY-COHESION
-        // Sector Rotation — which part of the board is running hot RIGHT NOW.
-        // Positional runs chi-square over the whole session, so it cannot see a
-        // bias that started sixty draws ago. This scores each row and column over
-        // a short window against its expected share, takes the two strongest
-        // sectors, and picks inside them by gap — so frequency decides the SECTOR
-        // and the gap decides the numbers, instead of hit count deciding both.
-        getSectorRotationNumbers(count = 9) {
-            const N = this.numberCount;
-            const cols = this.gridCols, rows = this.gridRows;
-            const games = this.data.kenoStats.analyzedGames || this.data.kenoStats.totalBets;
-            if (games < 30) return this.getPositionalNumbers(count);
-            const w = Math.max(30, Math.min(60, Math.round(games * 0.25)));
-            const draws = this.getRecentDraws(w);
-            if (draws.length < 20) return this.getPositionalNumbers(count);
-
-            const hits = new Array(N + 1).fill(0);
-            let total = 0;
-            for (const d of draws) for (const n of d) if (n >= 1 && n <= N) { hits[n]++; total++; }
-
-            // sectors = every row and every column, scored by z against its share
-            const sectors = [];
-            const push = (label, members) => {
-                const seen = members.reduce((t, n) => t + hits[n], 0);
-                const share = members.length / N;
-                const exp = total * share;
-                const sd = Math.sqrt(Math.max(total * share * (1 - share), 1e-9));
-                sectors.push({ label, members, z: (seen - exp) / sd });
-            };
-            for (let r = 0; r < rows; r++) {
-                const m = [];
-                for (let c = 0; c < cols; c++) { const n = r * cols + c + 1; if (n <= N) m.push(n); }
-                if (m.length) push(`row ${r + 1}`, m);
-            }
-            for (let c = 0; c < cols; c++) {
-                const m = [];
-                for (let r = 0; r < rows; r++) { const n = r * cols + c + 1; if (n <= N) m.push(n); }
-                if (m.length) push(`col ${c + 1}`, m);
-            }
-            sectors.sort((a, b) => b.z - a.z);
-            const pool = [...new Set([...sectors[0].members, ...(sectors[1]?.members || [])])];
-            this._lastSector = sectors.slice(0, 2).map(x => x.label).join(' + ');
-
-            // inside the hot sectors, take the most overdue numbers
-            const stats = this.data.kenoStats.perNumberStats || [];
-            const ranked = pool.map(n => {
-                const st = stats[n - 1];
-                const avg = st && st.avgInterval > 0 ? st.avgInterval : (N / (this._drawnPerGame || 10));
-                return { n, ratio: st ? (st.betsSince || 0) / avg : 0 };
-            }).sort((a, b) => b.ratio - a.ratio).map(x => x.n);
-            if (ranked.length >= count) return ranked.slice(0, count).sort((a, b) => a - b);
-            const fill = this.getHotNumbers(count * 2).filter(n => !ranked.includes(n));
-            return [...ranked, ...fill].slice(0, count).sort((a, b) => a - b);
-        }
-        selectSectorRotationNumbers() {
-            this.animateSequentialSelection(this.getSectorRotationNumbers());
-        }
-
-
         // TAG: NEW-STRATEGY-EDGE
         getEdgeNumbers(count = 9) {
             // Fallback if no performance data
@@ -7386,12 +7311,11 @@
                 positional: (c) => this.getPositionalNumbers(c),
                 hot: (c) => this.getHotNumbers(c),
                 repeat: (c) => this.getRepeatChaserNumbers(c),
-                sector: (c) => this.getSectorRotationNumbers(c),
+                successor: (c) => this.getSuccessorNumbers(c),
                 cold: (c) => this.getColdNumbers(c),
                 overdue: (c) => this.getOverdueNumbers(c),
                 streak: (c) => this.getStreakNumbers(c),
                 drought: (c) => this.getDroughtReboundNumbers(c),
-                realised: (c) => this.getRealisedReturnNumbers(c),
                 digitbias: (c) => this.getDigitBiasNumbers(c),
                 anticluster: (c) => this.getAntiClusterNumbers(c)
             };
@@ -7412,7 +7336,7 @@
             // Nothing in this session has shown an edge yet — say so by falling
             // back to the old fixed slate rather than inventing weights.
             if (!weighted.length) {
-                weighted = ['ema', 'positional', 'hot', 'repeat', 'sector'].map(id => ({ id, w: 1 }));
+                weighted = ['ema', 'positional', 'hot', 'repeat', 'successor'].map(id => ({ id, w: 1 }));
             }
             this._edgeBlend = weighted.map(x => `${this.getStrategyName(x.id) || x.id}`).join(' + ');
 
@@ -7455,6 +7379,182 @@
             this.animateSequentialSelection(numbers);
         }
 
+        // --- Strategy: Successor (lag-1 Markov, off the diagonal) ---
+        // Repeat asks whether a number follows ITSELF. Successor asks which
+        // numbers follow the ones that came up LAST GAME, which is the same
+        // transition matrix read off its diagonal, and it is the only strategy
+        // on either grid conditioned on the previous draw.
+        //
+        // The obvious version of this is Hot wearing a hat. Scoring a candidate
+        // as sum over n in last of ( P(m|n) - 0.25 ) averages ten heavily
+        // overlapping sub-samples of the same history, so it collapses to ten
+        // times m's own marginal rate and ranks exactly like heat. Centring
+        // each term on m's MARGINAL rate instead of on chance cancels that
+        // component and leaves the conditional dependence, which is the thing
+        // actually being claimed.
+        //
+        // Null: under a fair shuffle the next draw is independent of this one,
+        // so C[n][m] ~ Binomial(R[n], q[m]) and every centred term has mean
+        // zero. Dividing by the pooled standard error makes the sum a z-score
+        // rather than a raw lift, so a candidate backed by thin rows cannot
+        // outrank one backed by full ones.
+        getSuccessorNumbers(count = 9) {
+            const N = this.numberCount;
+            const draws = this.getRecentDraws(300);
+            if (draws.length < 150) return this.getHotNumbers(count);
+
+            // C[n][m] = times m appeared in the draw AFTER one containing n.
+            // R[n]    = times n appeared with a next draw to check.
+            // marg[m] = times m appeared in any draw that had a predecessor.
+            const C = Array.from({ length: N + 1 }, () => new Float32Array(N + 1));
+            const R = new Array(N + 1).fill(0);
+            const marg = new Array(N + 1).fill(0);
+            let pairs = 0;
+            // draws[0] is newest, so draws[i + 1] is the game BEFORE draws[i].
+            for (let i = 0; i < draws.length - 1; i++) {
+                const next = draws[i], prev = draws[i + 1];
+                pairs++;
+                for (const m of next) if (m >= 1 && m <= N) marg[m]++;
+                for (const n of prev) {
+                    if (n < 1 || n > N) continue;
+                    R[n]++;
+                    const row = C[n];
+                    for (const m of next) if (m >= 1 && m <= N) row[m]++;
+                }
+            }
+            // Rows with almost no exposure say nothing; drop them rather than
+            // let them drag ten-term sums around.
+            const last = [...new Set(draws[0])].filter(n => n >= 1 && n <= N && R[n] >= 8);
+            if (!last.length || !pairs) return this.getHotNumbers(count);
+
+            const K = 8;   // shrinkage strength, same as Repeat
+            const hot = this.data.kenoStats.hotNumbers || [];
+            return Array.from({ length: N }, (_, i) => {
+                const m = i + 1;
+                const q = marg[m] / pairs;              // m's own rate: the thing to beat
+                let lift = 0, varSum = 0;
+                for (const n of last) {
+                    // shrink toward m's marginal so a 2-of-3 fluke cannot top the table
+                    lift += (C[n][m] + q * K) / (R[n] + K) - q;
+                    varSum += q * (1 - q) / R[n];
+                }
+                const se = Math.sqrt(Math.max(varSum, 1e-12));
+                return { n: m, z: lift / se, h: hot[i] || 0 };
+            }).sort((a, b) => b.z - a.z || b.h - a.h)
+                .slice(0, count).map(x => x.n).sort((a, b) => a - b);
+        }
+        selectSuccessorNumbers() {
+            this.animateSequentialSelection(this.getSuccessorNumbers());
+        }
+
+        // --- Strategy: Cycle (autocorrelation past lag 1) ---
+        // Every other gap strategy here uses only the mean and the spread of a
+        // number's gaps. None asks whether the gaps repeat on a PERIOD. This
+        // takes each number's hit/miss series and looks for the strongest
+        // autocorrelation at lags 2 to 20, then plays only the numbers whose
+        // cycle points at this game.
+        //
+        // Under independence the sample autocorrelation is approximately
+        // N(0, 1/D), so Bartlett's band is 2/sqrt(D). Nineteen lags per number
+        // is nineteen chances to clear it, so the band is Sidak-corrected:
+        // z(1 - 0.05/(2*19)) / sqrt(D), and z(0.99868) ~ 3.0. On a fair board
+        // almost nothing clears that, and the tile hands back to Hot -- which is
+        // the gate working, not the strategy failing.
+        getCycleNumbers(count = 9) {
+            const N = this.numberCount;
+            const draws = this.getRecentDraws(200);
+            const D = draws.length;
+            if (D < 200) return this.getHotNumbers(count);
+            const MINLAG = 2, MAXLAG = 20;
+            const band = 3.0 / Math.sqrt(D);
+            const inSet = Array.from({ length: D }, (_, t) => new Set(draws[t]));
+            const scored = [];
+            for (let n = 1; n <= N; n++) {
+                const x = new Array(D);
+                for (let t = 0; t < D; t++) x[t] = inSet[t].has(n) ? 1 : 0;
+                const mean = x.reduce((a, b) => a + b, 0) / D;
+                let c0 = 0;
+                for (let t = 0; t < D; t++) c0 += (x[t] - mean) * (x[t] - mean);
+                if (c0 <= 0) continue;
+                let bestLag = 0, bestR = 0;
+                for (let k = MINLAG; k <= MAXLAG; k++) {
+                    let ck = 0;
+                    for (let t = 0; t + k < D; t++) ck += (x[t] - mean) * (x[t + k] - mean);
+                    const r = ck / c0;
+                    if (Math.abs(r) > Math.abs(bestR)) { bestR = r; bestLag = k; }
+                }
+                if (!bestLag || Math.abs(bestR) < band) continue;
+                // In phase = the cycle points at NOW. draws[0] is the last game
+                // played, so the game k back from the one about to be played is
+                // draws[k - 1]. A positive correlation says "drawn then -> likely
+                // now"; a negative one says "drawn then -> unlikely now".
+                const then = x[bestLag - 1] === 1;
+                if (bestR > 0 ? !then : then) continue;
+                scored.push({ n, score: Math.abs(bestR), lag: bestLag });
+            }
+            scored.sort((a, b) => b.score - a.score);
+            this._lastCycle = scored.length ? `lag ${scored[0].lag}` : 'no cycle';
+            const picked = scored.slice(0, count).map(x => x.n);
+            if (picked.length < count) {
+                const fill = this.getHotNumbers(count * 2).filter(n => !picked.includes(n));
+                picked.push(...fill.slice(0, count - picked.length));
+            }
+            return picked.slice(0, count).sort((a, b) => a - b);
+        }
+        selectCycleNumbers() {
+            this.animateSequentialSelection(this.getCycleNumbers());
+        }
+
+        // --- Strategy: Runs (Wald-Wolfowitz) ---
+        // Volatility measures how SPREAD OUT a number's gaps are. This measures
+        // how they are ARRANGED, which is a different property: a number can
+        // have a high gap CV with its hits evenly scattered, and a low one with
+        // them bunched, so the two rank differently by construction.
+        //
+        // A run is a maximal block of consecutive hits or consecutive misses.
+        // With n1 hits and n0 misses in n games the null moments are exact:
+        //   E[R]   = 2*n1*n0/n + 1
+        //   Var[R] = 2*n1*n0*(2*n1*n0 - n) / (n^2 * (n - 1))
+        // A strongly negative z means the hits arrive in bunches. Those are only
+        // worth playing while the sequence is still inside a bunch, so a number
+        // also has to have come up in one of the last two games.
+        getRunsNumbers(count = 9) {
+            const N = this.numberCount;
+            const draws = this.getRecentDraws(300);
+            const n = draws.length;
+            if (n < 40) return this.getHotNumbers(count);
+            const inSet = draws.map(d => new Set(d));
+            const scored = [];
+            for (let num = 1; num <= N; num++) {
+                let n1 = 0, runs = 0, prev = -1;
+                for (let t = n - 1; t >= 0; t--) {          // oldest -> newest
+                    const hit = inSet[t].has(num) ? 1 : 0;
+                    if (hit) n1++;
+                    if (hit !== prev) { runs++; prev = hit; }
+                }
+                const n0 = n - n1;
+                if (n1 < 10 || n0 < 10) continue;           // normal approximation floor
+                const t2 = 2 * n1 * n0;
+                const eR = t2 / n + 1;
+                const vR = t2 * (t2 - n) / (n * n * (n - 1));
+                if (vR <= 0) continue;
+                const z = (runs - eR) / Math.sqrt(vR);
+                if (z >= -1) continue;                      // no clustering worth playing
+                if (!inSet[0].has(num) && !(inSet[1] && inSet[1].has(num))) continue;
+                scored.push({ n: num, score: -z });
+            }
+            scored.sort((a, b) => b.score - a.score);
+            const picked = scored.slice(0, count).map(x => x.n);
+            if (picked.length < count) {
+                const fill = this.getHotNumbers(count * 2).filter(x => !picked.includes(x));
+                picked.push(...fill.slice(0, count - picked.length));
+            }
+            return picked.slice(0, count).sort((a, b) => a - b);
+        }
+        selectRunsNumbers() {
+            this.animateSequentialSelection(this.getRunsNumbers());
+        }
+
         // --- Strategy: Cluster (co-occurrence) ---
         // Numbers that land together: seed from the hottest, grow by total
         // co-occurrence with the set so far, for a tightly-clustered pick.
@@ -7465,7 +7565,7 @@
         getAntiClusterNumbers(count = 9) {
             const N = this.numberCount;
             const draws = this.getRecentDraws(150);
-            if (draws.length < 20) return this.getCoverageNumbers(count);
+            if (draws.length < 20) return this.getSmartNumbers(count);
             const pairs = this.pairCounts(150);
             const together = (a, b) => pairs[a < b ? `${a}-${b}` : `${b}-${a}`] || 0;
             // seed with the number that shares fewest draws with everything else
@@ -7490,43 +7590,6 @@
         }
         selectAntiClusterNumbers() {
             this.animateSequentialSelection(this.getAntiClusterNumbers());
-        }
-
-        // --- Strategy: Pulse (recency × frequency, recent-window boosted) ---
-        // Realised Return — the only strategy that reads your BET history rather
-        // than the draw history. For every number, the money your paid bets that
-        // included it actually returned, per unit staked. Needs real bets: with
-        // nothing staked there is nothing to rank, so it stands aside.
-        getRealisedReturnNumbers(count = 9) {
-            const N = this.numberCount;
-            const all = this._validBets || [];
-            const staked = new Array(N + 1).fill(0);
-            const profit = new Array(N + 1).fill(0);
-            let paidBets = 0;
-            for (const b of all) {
-                const stake = VantedgeMoney.betStake(b);
-                if (!stake) continue;
-                const sel = b?.state?.selectedNumbers;
-                if (!Array.isArray(sel) || !sel.length) continue;
-                paidBets++;
-                const pl = betProfit(b);
-                for (const n of new Set(sel)) {
-                    if (n < 1 || n > N) continue;
-                    staked[n] += stake;
-                    profit[n] += pl;
-                }
-            }
-            if (paidBets < 10) return this.getHotNumbers(count);
-            return Array.from({ length: N }, (_, i) => {
-                const n = i + 1;
-                // shrink toward break-even so one lucky bet on a rare number
-                // cannot top the table
-                const weight = staked[n] / (staked[n] + 20);
-                return { n, score: staked[n] > 0 ? (profit[n] / staked[n]) * weight : -1 };
-            }).sort((a, b) => b.score - a.score).slice(0, count).map(x => x.n).sort((a, b) => a - b);
-        }
-        selectRealisedReturnNumbers() {
-            this.animateSequentialSelection(this.getRealisedReturnNumbers());
         }
 
         calculateHeatScore(count, betsSince, avgInterval, totalBets) {
