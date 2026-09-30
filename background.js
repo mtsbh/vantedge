@@ -126,6 +126,7 @@ let lastKenoStrategy = {};
   let stateIsLoaded = (async () => {
     try {
       const result = await browser.storage.local.get(null);
+      Object.keys(result).forEach(k => rememberSaved(k, result[k]));
       state = { ...state, ...result };
       migrateWinnaOrigins();
       return true;
@@ -1507,12 +1508,47 @@ let lastKenoStrategy = {};
     return payload;
   }
 
+  // Last JSON written per key. The old save wrote the WHOLE state on every
+  // bet, and Firefox fires storage.onChanged with old+new values for every key
+  // set — changed or not — so each bet shipped all of it (1500-bet history,
+  // correlations, legend stats…) into the page twice. Only write what changed.
+  const lastSavedJSON = new Map();
+  function toJSON(v) {
+    try { return JSON.stringify(v); } catch (e) { return undefined; }
+  }
+  function rememberSaved(key, value) {
+    const j = toJSON(value);
+    if (j === undefined) lastSavedJSON.delete(key); else lastSavedJSON.set(key, j);
+  }
+  function changedState() {
+    const payload = persistableState();
+    const out = {};
+    const jsons = {};
+    Object.keys(payload).forEach(k => {
+      const j = toJSON(payload[k]);
+      if (j === undefined || lastSavedJSON.get(k) !== j) {
+        out[k] = payload[k];
+        jsons[k] = j;
+      }
+    });
+    return { out, jsons };
+  }
+  async function writeChanged() {
+    const { out, jsons } = changedState();
+    if (!Object.keys(out).length) return;
+    await browser.storage.local.set(out);
+    Object.keys(jsons).forEach(k => {
+      if (jsons[k] === undefined) lastSavedJSON.delete(k); else lastSavedJSON.set(k, jsons[k]);
+    });
+  }
+
   async function saveToStorage(immediate = false) {
     const payload = persistableState();
     // For critical operations like reset, save immediately without debounce
     if (immediate) {
       try {
         await browser.storage.local.set(payload);
+        Object.keys(payload).forEach(k => rememberSaved(k, payload[k]));
         log('✅ Storage saved immediately');
       } catch (error) {
         if (error.message && error.message.includes('quota')) {
@@ -1537,7 +1573,7 @@ let lastKenoStrategy = {};
     clearTimeout(saveTimeout);
     saveTimeout = setTimeout(async () => {
       try {
-        await browser.storage.local.set(persistableState());
+        await writeChanged();
       } catch (error) {
         if (error.message && error.message.includes('quota')) {
           console.warn('⚠️ Storage quota exceeded! Cleaning up old data...');
@@ -1713,8 +1749,10 @@ let lastKenoStrategy = {};
     const freshState = { seedResults: {}, allMultipliers: {}, betsSinceMultiplier: {}, lastOccurrenceMultiplier: {}, kenoResults: {}, kenoHotNumbers: {}, kenoCorrelations: {}, kenoLastOccurrences: {}, kenoLastSeen: {}, kenoTotalBets: {}, kenoEnhancedState: {}, minesResults: {}, minesHeatmaps: {}, currentMineCount: 3, minesAdvancedStats: { totalGames: 0, wins: 0, losses: 0, totalProfit: 0, totalWagered: 0, streaks: { current: { type: null, count: 0 }, longest: { win: 0, loss: 0 } }, patterns: { clusters: [], safeZones: [], hotSpots: [] }, gameHistory: [], gamesByMineCount: {}, currentMineCount: 3 }, lastPlayedGame: 'Plinko' };
 
     await browser.storage.local.clear();
+    lastSavedJSON.clear();
     state = { ...freshState, legendStats: preserved.legendStats || {} };
     await browser.storage.local.set(state);
+    Object.keys(state).forEach(k => rememberSaved(k, state[k]));
 
     // Restore the overlay/cloud-owned keys (the background never persists these
     // via saveToStorage, so write them back directly after the wipe).

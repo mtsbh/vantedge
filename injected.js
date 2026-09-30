@@ -804,6 +804,10 @@
 
     function handleStakeResponse(responseText, url, method, requestData) {
         try {
+            // Stake routes every call (balances, notifications, feeds…) through
+            // graphql. Parsing and deep-walking each one is what dragged the page
+            // down, so skip anything that can't be a game result before parsing.
+            if (!/drawnNumbers|keno|plinkoBet|mines(Bet|Next|Cashout)/i.test(responseText)) return;
             const response = JSON.parse(responseText);
             log('🎯 Processing Stake response from:', url);
 
@@ -927,8 +931,8 @@
         const rawDrawn = gameData.state?.drawnNumbers || gameData.drawnNumbers || gameData.numbers || [];
         const rawSelected = gameData.state?.selectedNumbers || gameData.selectedNumbers || gameData.picks || [];
 
-        console.log('🔵 RAW Stake data:', gameData);
-        console.log('🔍 Stake amount fields:', {
+        log('🔵 RAW Stake data:', gameData);
+        log('🔍 Stake amount fields:', {
             amount: gameData.amount,
             bet: gameData.bet,
             betAmount: gameData.betAmount,
@@ -1268,16 +1272,5 @@
         log('🟢 TRANSFORMED BetFury data:', transformed);
         return transformed;
     }
-
-    let lastURL = location.href;
-    new MutationObserver(() => {
-        const url = location.href;
-        if (url !== lastURL) {
-            lastURL = url;
-            if (url.includes('keno')) {
-                log('🎯 Navigated to Keno page, monitoring for games...');
-            }
-        }
-    }).observe(document, { subtree: true, childList: true });
 
 })();
