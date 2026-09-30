@@ -754,9 +754,9 @@
             // sessions don't lag the page.
             this.populateHeatmap();
             this.updateStatusBar();
-            safe(() => this.checkGapAlerts());
             const now = Date.now();
             if (!this.lastUiUpdateTime || (now - this.lastUiUpdateTime) >= 2000) {
+                safe(() => this.checkGapAlerts());
                 this.renderInsights();
                 this.updateAIRecommendation();
                 safe(() => this.renderKenoPayouts());
@@ -1371,18 +1371,44 @@
             return map;
         }
 
-        // Gap (draws since the combo last fully hit) + total full hits, from the
-        // draw history — counts even when the combo wasn't being played.
-        comboGap(numbers) {
-            const draws = this.getRecentDraws(1000);
-            let gap = null, hits = 0;
+        // Recent draws as bitmasks (lo: 1-31, hi: 32-62), cached per bet set so
+        // gap checks across many combos don't rescan and re-Set every draw.
+        _drawMasks(limit) {
+            const all = this._validBets || [];
+            const c = this._drawMaskCache;
+            if (c && c.ref === all && c.n === this.numberCount && c.limit >= limit) return c;
+            const cap = Math.max(limit, 1000);
+            const draws = this.getRecentDraws(cap);
+            const lo = new Int32Array(draws.length), hi = new Int32Array(draws.length);
             for (let i = 0; i < draws.length; i++) {
                 const d = draws[i];
-                let all = true;
-                for (let j = 0; j < numbers.length; j++) { if (d.indexOf(numbers[j]) === -1) { all = false; break; } }
-                if (all) { hits++; if (gap === null) gap = i; }
+                for (let j = 0; j < d.length; j++) {
+                    const n = d[j];
+                    if (n <= 31) lo[i] |= 1 << (n - 1); else hi[i] |= 1 << (n - 32);
+                }
             }
-            return { gap, hits };
+            this._drawMaskCache = { ref: all, n: this.numberCount, limit: cap, lo, hi, len: draws.length };
+            return this._drawMaskCache;
+        }
+
+        // Gap (draws since the combo last fully hit) + total full hits, from the
+        // draw history — counts even when the combo wasn't being played.
+        comboGap(numbers, limit = 1000) {
+            const { lo, hi, len } = this._drawMasks(limit);
+            let wl = 0, wh = 0;
+            for (const n of numbers) {
+                if (n >= 1 && n <= 31) wl |= 1 << (n - 1);
+                else if (n >= 32 && n <= 62) wh |= 1 << (n - 32);
+            }
+            const end = Math.min(len, limit);
+            let gap = null, hits = 0;
+            for (let i = 0; i < end; i++) {
+                if ((lo[i] & wl) === wl && (hi[i] & wh) === wh) {
+                    hits++;
+                    if (gap === null) gap = i;
+                }
+            }
+            return { gap, hits, count: hits, draws: end };
         }
 
         // Stats for one specific combo (Smart Picker preview).
@@ -2473,20 +2499,6 @@
         // Draws since a specific combo last landed in full, and how many times it
         // has. Cheaper than computeHotGroups for a handful of saved combos, and
         // works for any size rather than one k at a time.
-        comboGap(numbers, limit = 600) {
-            const want = [...new Set(numbers)];
-            const draws = this.getRecentDraws(limit);
-            let gap = null, count = 0;
-            for (let i = 0; i < draws.length; i++) {
-                const d = new Set(draws[i]);
-                if (want.every(n => d.has(n))) {
-                    if (gap === null) gap = i;    // index 0 is the most recent draw
-                    count++;
-                }
-            }
-            return { gap, count, draws: draws.length };
-        }
-
         // Tell you when a SAVED combo crosses into due or overdue territory.
         //
         // Favourites only, on purpose. The hot-groups table churns constantly, so
@@ -2522,7 +2534,7 @@
                     if (nums.length < 2 || nums.length > 10) continue;
                     const exp = this.expectedGroupGap(nums.length);
                     if (!isFinite(exp) || exp <= 0) continue;
-                    const { gap } = this.comboGap(nums);
+                    const { gap } = this.comboGap(nums, 600);
                     if (gap === null) continue;
                     const ratio = gap / exp;
                     const state = gap === 0 ? 'now' : ratio >= 1.5 ? 'overdue' : ratio >= 0.8 ? 'due' : '';
@@ -3596,7 +3608,9 @@
                    font-size: 13px;
                    z-index: 999999;
                    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
-                   backdrop-filter: blur(10px);
+                   /* No backdrop-filter: the background is opaque so the blur was
+                      invisible, and Firefox re-blurs the live page behind it on
+                      every frame the game animates. */
                    overflow: visible;
                    transition: opacity 0.3s ease, transform 0.3s ease;
                    pointer-events: auto;
@@ -4906,7 +4920,7 @@
 
         setupUrlWatcher() {
             let lastURL = location.href;
-            const debouncedUrlCheck = this.debounce(() => {
+            const checkUrl = () => {
                 const url = location.href;
                 if (url !== lastURL) {
                     lastURL = url;
@@ -4917,9 +4931,12 @@
                         this.detectKeno();
                     }
                 }
-            }, 1000);
-            this.mutationObserver = new MutationObserver(debouncedUrlCheck);
-            this.mutationObserver.observe(document, { subtree: true, childList: true });
+            };
+            clearInterval(this._urlPollHandle);
+            // Poll instead of observing every DOM mutation on the page: the
+            // casino re-renders constantly (bet feeds, balance, animations) and a
+            // document-wide subtree observer fired on all of it.
+            this._urlPollHandle = setInterval(checkUrl, 1000);
         }
 
 
@@ -6885,6 +6902,23 @@
                 // been rebuilt since (it renders asynchronously after the saved
                 // order loads), so repaint rather than returning empty-handed.
                 if (this._probedAt === bets) { this.refreshHandoffMarks(); return; }
+                // Running every strategy is ~35 getters (Monte Carlo included).
+                // During autobet that ran on every bet; coalesce to one probe per
+                // 2s, finished off the hot path once the burst settles.
+                const now = Date.now();
+                if (this._probeLast && now - this._probeLast < 2000) {
+                    if (!this._probeTimer) {
+                        this._probeTimer = setTimeout(() => {
+                            this._probeTimer = null;
+                            const run = () => this.probeHandoffs();
+                            if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 1000 });
+                            else setTimeout(run, 0);
+                        }, 2000 - (now - this._probeLast));
+                    }
+                    this.refreshHandoffMarks();
+                    return;
+                }
+                this._probeLast = now;
                 this._probedAt = bets;
                 this.traceStrategyGetters();
                 const map = this.selectMethodMap();
@@ -7922,6 +7956,8 @@
                 clearInterval(this._modePollHandle);
                 clearInterval(this._kenoDetectHandle);
                 this.mutationObserver?.disconnect();
+                clearInterval(this._urlPollHandle);
+                clearTimeout(this._probeTimer);
                 const browserAPI = (typeof browser !== 'undefined') ? browser : chrome;
                 this._storageListeners.forEach(fn => {
                     safe(() => browserAPI?.storage?.onChanged?.removeListener(fn));
