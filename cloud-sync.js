@@ -247,7 +247,6 @@ const SYNCED_STORAGE_KEYS = ['legendStats'];
             try {
                 if (!(await tokenConfigured())) return;   // no token set → skip silently
                 await pushNow();
-                console.log('☁️ Vantedge: auto-synced to Gist');
             } catch (e) {
                 console.warn('☁️ Vantedge: auto-sync failed:', e.message);
                 await api.storage.local.set({

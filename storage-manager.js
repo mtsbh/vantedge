@@ -4,6 +4,9 @@
  * Uses IndexedDB for robust persistence that survives extension reinstalls
  */
 
+const SM_DEBUG = false;
+function smLog(...args) { if (SM_DEBUG) console.log(...args); }
+
 class VantEdgeStorageManager {
     constructor() {
         this.dbName = 'VantEdgeLegendDB';
@@ -26,7 +29,7 @@ class VantEdgeStorageManager {
             await this.initSync();
             await this.migrateFromLocalStorage();
             await this.startAutoBackup();
-            console.log('VantEdge Storage Manager initialized successfully');
+            smLog('VantEdge Storage Manager initialized successfully');
             return true;
         } catch (error) {
             console.error('Failed to initialize storage manager:', error);
@@ -48,7 +51,7 @@ class VantEdgeStorageManager {
 
             request.onsuccess = (event) => {
                 this.db = event.target.result;
-                console.log('IndexedDB opened successfully');
+                smLog('IndexedDB opened successfully');
                 resolve();
             };
 
@@ -74,7 +77,7 @@ class VantEdgeStorageManager {
                     db.createObjectStore('metadata', { keyPath: 'key' });
                 }
 
-                console.log('IndexedDB schema created/upgraded');
+                smLog('IndexedDB schema created/upgraded');
             };
         });
     }
@@ -85,12 +88,12 @@ class VantEdgeStorageManager {
     async initSync() {
         if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
             this.syncEnabled = true;
-            console.log('Chrome Storage Sync enabled');
+            smLog('Chrome Storage Sync enabled');
         } else if (typeof browser !== 'undefined' && browser.storage && browser.storage.sync) {
             this.syncEnabled = true;
-            console.log('Browser Storage Sync enabled');
+            smLog('Browser Storage Sync enabled');
         } else {
-            console.log('Storage Sync not available');
+            smLog('Storage Sync not available');
         }
     }
 
@@ -102,11 +105,11 @@ class VantEdgeStorageManager {
             const browserAPI = typeof browser !== 'undefined' ? browser : chrome;
             const result = await browserAPI.storage.local.get('legendStats');
             if (result.legendStats && Object.keys(result.legendStats).length > 0) {
-                console.log('Migrating legend stats from local storage to IndexedDB...');
+                smLog('Migrating legend stats from local storage to IndexedDB...');
                 for (const [siteKey, stats] of Object.entries(result.legendStats)) {
                     await this.saveLegendStats(siteKey, stats);
                 }
-                console.log('Migration completed successfully');
+                smLog('Migration completed successfully');
                 await this.createBackup('Migration backup');
             }
         } catch (error) {
@@ -251,7 +254,7 @@ class VantEdgeStorageManager {
             const dataStr = JSON.stringify(syncData);
             if (dataStr.length < 7000) { // Leave buffer for safety
                 browserAPI.storage.sync.set({ [syncKey]: syncData });
-                console.log(`Synced ${siteKey} to cloud storage`);
+                smLog(`Synced ${siteKey} to cloud storage`);
             } else {
                 console.warn(`Data for ${siteKey} too large for sync storage`);
             }
@@ -288,7 +291,7 @@ class VantEdgeStorageManager {
                 const request = store.add(backup);
 
                 request.onsuccess = async () => {
-                    console.log('Backup created successfully:', backup.timestamp);
+                    smLog('Backup created successfully:', backup.timestamp);
 
                     // Clean up old backups
                     await this.cleanupOldBackups();
@@ -344,7 +347,7 @@ class VantEdgeStorageManager {
                             await this.saveLegendStats(siteKey, stats);
                         }
 
-                        console.log('Backup restored successfully:', backup.timestamp);
+                        smLog('Backup restored successfully:', backup.timestamp);
                         resolve(backup);
                     };
 
@@ -416,7 +419,7 @@ class VantEdgeStorageManager {
                 });
 
                 transaction.oncomplete = () => {
-                    console.log(`Cleaned up ${toDelete.length} old backups`);
+                    smLog(`Cleaned up ${toDelete.length} old backups`);
                     resolve();
                 };
             });
@@ -461,7 +464,7 @@ class VantEdgeStorageManager {
                 await this.saveLegendStats(siteKey, stats);
             }
 
-            console.log('Import completed successfully');
+            smLog('Import completed successfully');
             return {
                 success: true,
                 sitesImported: Object.keys(importData.legendStats).length
@@ -491,7 +494,7 @@ class VantEdgeStorageManager {
             const timeSinceLastBackup = Date.now() - this.lastBackupTime;
 
             if (timeSinceLastBackup >= this.autoBackupInterval) {
-                console.log('Creating automatic backup...');
+                smLog('Creating automatic backup...');
                 await this.createBackup('Automatic backup');
             }
         }, 60 * 60 * 1000); // Check every hour

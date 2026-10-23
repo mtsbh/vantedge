@@ -1,4 +1,3 @@
-console.log('Vantedge: Content script loaded.');
 
 if (typeof browser === 'undefined') {
     var browser = chrome;

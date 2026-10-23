@@ -12,7 +12,7 @@ It records every draw, builds a live heatmap, and runs 32 statistical strategies
 
 [![Manifest](https://img.shields.io/badge/Manifest-V3-4CAF50)](#)
 [![Browsers](https://img.shields.io/badge/Chrome%20·%20Edge%20·%20Brave%20·%20Vivaldi%20·%20Firefox-supported-4CAF50)](#)
-[![Version](https://img.shields.io/badge/version-3.26-blue)](#)
+[![Version](https://img.shields.io/badge/version-3.28-blue)](#)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](#license)
 
 ![VantEdge running on Stake Keno - 400x hit with the analytics sidebar docked alongside the board](docs/screenshots/stake1.png)
@@ -45,7 +45,7 @@ It records every draw, builds a live heatmap, and runs 32 statistical strategies
 
 ## 🎰 Supported sites
 
-Stake (`.com / .us / .games / .bet`) · Rainbet · Roobet · Shuffle · BetFury · AceBet
+Stake (`.com / .us / .games / .bet`) · Rainbet · Roobet · Shuffle · BetFury · Winna · AceBet
 
 ---
 

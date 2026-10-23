@@ -1,3 +1,6 @@
+const DEBUG = false;
+function log(...args) { if (DEBUG) console.log(...args); }
+
 // Shared money math (VantedgeMoney) — same importScripts / background.scripts
 // pattern as the modules below. Every surface counts P/L through it.
 try {
@@ -19,7 +22,7 @@ try {
   }
   storageManagerReady = typeof VantEdgeStorageManager !== 'undefined';
   if (storageManagerReady) {
-    console.log('✅ Storage manager loaded successfully');
+    log('✅ Storage manager loaded successfully');
   } else {
     console.error('❌ Storage manager global not found');
   }
@@ -34,7 +37,7 @@ try {
     importScripts('cloud-sync.js');
   }
   if (typeof self.VantedgeCloudSync !== 'undefined') {
-    console.log('✅ Cloud sync module loaded');
+    log('✅ Cloud sync module loaded');
   } else {
     console.error('❌ Cloud sync module global not found');
   }
@@ -46,8 +49,6 @@ const originalError = console.error;
 const originalWarn = console.warn;
 const originalLog = console.log;
 
-const DEBUG = false;
-function log(...args) { if (DEBUG) console.log(...args); }
 
 console.error = function (...args) {
   const message = args.join(' ');
@@ -93,7 +94,7 @@ let lastKenoStrategy = {};
           if (tabs.length > 0) {
             tabs.forEach(tab => browser.tabs.sendMessage(tab.id, { type: 'KEEP_ALIVE_PING' }).catch(e => { }));
             if (Math.random() < 0.1) {
-              console.log(`Vantedge BG: Pinged ${tabs.length} active tabs.`);
+              log(`Vantedge BG: Pinged ${tabs.length} active tabs.`);
             }
           } else {
             browser.storage.local.get('keepAliveCheck');
@@ -192,7 +193,7 @@ let lastKenoStrategy = {};
       });
       state.kenoHotNumbers[canonKey] = counts;
 
-      console.log(`♻️ Vantedge: merged ${merged} Winna bet(s) from legacy origins into ${canonKey}`);
+      log(`♻️ Vantedge: merged ${merged} Winna bet(s) from legacy origins into ${canonKey}`);
       saveToStorage();
     }
   }
@@ -255,7 +256,7 @@ let lastKenoStrategy = {};
           // Start reset asynchronously but respond immediately to prevent channel timeout
           resetSiteStats(message.origin)
             .then(() => {
-              console.log(`✅ [RESET] Reset completed for ${message.origin}`);
+              log(`✅ [RESET] Reset completed for ${message.origin}`);
             })
             .catch((error) => {
               console.error('❌ [RESET] Reset failed:', error);
@@ -275,7 +276,7 @@ let lastKenoStrategy = {};
           break;
 
         case 'SET_ACTIVE_STRATEGY':
-          console.log(`Vantedge BG: Setting next Keno strategy for ${message.origin} to '${message.strategy}'`);
+          log(`Vantedge BG: Setting next Keno strategy for ${message.origin} to '${message.strategy}'`);
           lastKenoStrategy[message.origin] = message.strategy;
           sendResponse({ success: true });
           break;
@@ -396,7 +397,7 @@ let lastKenoStrategy = {};
             state.legendStats = merged;
 
             const sitesImported = Object.keys(importData.legendStats).length;
-            console.log(`✅ Import: ${sitesImported} site(s) saved to browser.storage.local`);
+            log(`✅ Import: ${sitesImported} site(s) saved to browser.storage.local`);
 
             // Also push to IndexedDB if available (best-effort, non-blocking)
             const manager = self.VantEdgeStorageManager;
@@ -839,7 +840,7 @@ let lastKenoStrategy = {};
     if (resetTimestamps[siteKey]) {
       const timeSinceReset = Date.now() - resetTimestamps[siteKey];
       if (timeSinceReset < 2000) {
-        console.log(`🚫 [RESET] Ignoring bet received ${timeSinceReset}ms after reset for ${siteKey}`);
+        log(`🚫 [RESET] Ignoring bet received ${timeSinceReset}ms after reset for ${siteKey}`);
         return;
       } else {
         // Clear the reset timestamp after the grace period
@@ -849,9 +850,9 @@ let lastKenoStrategy = {};
 
     // Debug log for high multipliers
     if (betData.payoutMultiplier >= 30) {
-      console.log(`🎯 BG: Received HIGH multiplier ${betData.payoutMultiplier}x from ${siteOrigin}`);
-      console.log(`   Strategy: ${betData.activeStrategy || 'NONE'}`);
-      console.log(`   Site Key: ${siteKey}`);
+      log(`🎯 BG: Received HIGH multiplier ${betData.payoutMultiplier}x from ${siteOrigin}`);
+      log(`   Strategy: ${betData.activeStrategy || 'NONE'}`);
+      log(`   Site Key: ${siteKey}`);
     }
 
     if (lastKenoStrategy[siteOrigin]) {
@@ -863,7 +864,7 @@ let lastKenoStrategy = {};
       const activeKenoStrategy = betData.activeStrategy;
 
       if (activeKenoStrategy) {
-        console.log(`   ✅ SAVING to legend stats (strategy: ${activeKenoStrategy})`);
+        log(`   ✅ SAVING to legend stats (strategy: ${activeKenoStrategy})`);
         if (!state.legendStats) state.legendStats = {};
         if (!state.legendStats[siteKey]) {
           state.legendStats[siteKey] = { totalHits: 0, hitsByMultiplier: {}, hitsByStrategy: {}, recentHits: [] };
@@ -914,7 +915,7 @@ let lastKenoStrategy = {};
           }
         }
       } else {
-        console.log(`   ❌ NOT SAVED: No strategy attached to bet data`);
+        log(`   ❌ NOT SAVED: No strategy attached to bet data`);
       }
     }
 
@@ -1556,7 +1557,7 @@ let lastKenoStrategy = {};
           cleanupStorageData();
           try {
             await browser.storage.local.set(persistableState());
-            console.log('✅ Storage saved after cleanup');
+            log('✅ Storage saved after cleanup');
           } catch (retryError) {
             console.error('❌ Still cannot save after cleanup:', retryError);
             throw retryError;
@@ -1580,7 +1581,7 @@ let lastKenoStrategy = {};
           cleanupStorageData();
           try {
             await browser.storage.local.set(persistableState());
-            console.log('✅ Storage saved after cleanup');
+            log('✅ Storage saved after cleanup');
           } catch (retryError) {
             console.error('❌ Still cannot save after cleanup:', retryError);
           }
@@ -1594,14 +1595,14 @@ let lastKenoStrategy = {};
   }
 
   function cleanupStorageData() {
-    console.log('🧹 Starting aggressive storage cleanup...');
+    log('🧹 Starting aggressive storage cleanup...');
 
     // EMERGENCY cleanup - keep minimal data to stay under quota
     // Reduce Keno game history to last 2000 games per site (normally keeps 5000)
     Object.keys(state.kenoResults || {}).forEach(key => {
       if (state.kenoResults[key] && state.kenoResults[key].length > 2000) {
         state.kenoResults[key] = state.kenoResults[key].slice(0, 2000);
-        console.log(`📉 Emergency: Trimmed ${key} keno results to 2000 games`);
+        log(`📉 Emergency: Trimmed ${key} keno results to 2000 games`);
       }
     });
 
@@ -1609,7 +1610,7 @@ let lastKenoStrategy = {};
     Object.keys(state.seedResults || {}).forEach(key => {
       if (state.seedResults[key] && state.seedResults[key].length > 100) {
         state.seedResults[key] = state.seedResults[key].slice(0, 100);
-        console.log(`📉 Emergency: Trimmed ${key} plinko results to 100 games`);
+        log(`📉 Emergency: Trimmed ${key} plinko results to 100 games`);
       }
     });
 
@@ -1617,7 +1618,7 @@ let lastKenoStrategy = {};
     Object.keys(state.minesResults || {}).forEach(key => {
       if (state.minesResults[key] && state.minesResults[key].length > 100) {
         state.minesResults[key] = state.minesResults[key].slice(0, 100);
-        console.log(`📉 Emergency: Trimmed ${key} mines results to 100 games`);
+        log(`📉 Emergency: Trimmed ${key} mines results to 100 games`);
       }
     });
 
@@ -1625,7 +1626,7 @@ let lastKenoStrategy = {};
     if (state.minesAdvancedStats && state.minesAdvancedStats.gameHistory) {
       if (state.minesAdvancedStats.gameHistory.length > 50) {
         state.minesAdvancedStats.gameHistory = state.minesAdvancedStats.gameHistory.slice(0, 50);
-        console.log('📉 Emergency: Trimmed mines advanced stats history to 50');
+        log('📉 Emergency: Trimmed mines advanced stats history to 50');
       }
     }
 
@@ -1639,7 +1640,7 @@ let lastKenoStrategy = {};
             state.kenoCorrelations[size] = Object.fromEntries(
               entries.sort((a, b) => b[1] - a[1]).slice(0, 50)
             );
-            console.log(`📉 Emergency: Trimmed correlation data (size ${size}) to top 50`);
+            log(`📉 Emergency: Trimmed correlation data (size ${size}) to top 50`);
           }
         }
       });
@@ -1652,7 +1653,7 @@ let lastKenoStrategy = {};
           const entries = Object.entries(state.kenoLastOccurrences[size]);
           if (entries.length > 50) {
             state.kenoLastOccurrences[size] = Object.fromEntries(entries.slice(0, 50));
-            console.log(`📉 Emergency: Trimmed lastOccurrences (size ${size}) to 50`);
+            log(`📉 Emergency: Trimmed lastOccurrences (size ${size}) to 50`);
           }
         }
       });
@@ -1664,25 +1665,25 @@ let lastKenoStrategy = {};
           const entries = Object.entries(state.kenoLastSeen[size]);
           if (entries.length > 50) {
             state.kenoLastSeen[size] = Object.fromEntries(entries.slice(0, 50));
-            console.log(`📉 Emergency: Trimmed lastSeen (size ${size}) to 50`);
+            log(`📉 Emergency: Trimmed lastSeen (size ${size}) to 50`);
           }
         }
       });
     }
 
-    console.log('✅ Aggressive storage cleanup completed');
+    log('✅ Aggressive storage cleanup completed');
   }
 
   async function resetSiteStats(siteOrigin) {
-    console.log(`🔄 [RESET] Resetting stats for origin: ${siteOrigin}`);
+    log(`🔄 [RESET] Resetting stats for origin: ${siteOrigin}`);
 
     const kenoKey = `${siteOrigin}-keno-session`;
-    console.log(`🔑 [RESET] Using kenoKey: ${kenoKey}`);
-    console.log(`📊 [RESET] Before reset - Total bets: ${state.kenoTotalBets?.[kenoKey] || 0}, Results: ${state.kenoResults?.[kenoKey]?.length || 0}`);
+    log(`🔑 [RESET] Using kenoKey: ${kenoKey}`);
+    log(`📊 [RESET] Before reset - Total bets: ${state.kenoTotalBets?.[kenoKey] || 0}, Results: ${state.kenoResults?.[kenoKey]?.length || 0}`);
 
     // Set reset timestamp to block incoming bets for 2 seconds (prevents race condition)
     resetTimestamps[kenoKey] = Date.now();
-    console.log(`⏰ [RESET] Set reset timestamp for ${kenoKey} - will ignore bets for 2 seconds`);
+    log(`⏰ [RESET] Set reset timestamp for ${kenoKey} - will ignore bets for 2 seconds`);
 
     const keysToRemove = [];
 
@@ -1713,14 +1714,14 @@ let lastKenoStrategy = {};
     // aggregates the popup shows are shared by every site and stay put.
     if (state.minesResults?.[siteOrigin]) state.minesResults[siteOrigin] = [];
 
-    console.log(`📊 [RESET] After reset - Total bets: ${state.kenoTotalBets[kenoKey]}, Results: ${state.kenoResults[kenoKey].length}`);
-    console.log(`✅ [RESET] Keno + mines data for ${siteOrigin} cleared in memory`);
+    log(`📊 [RESET] After reset - Total bets: ${state.kenoTotalBets[kenoKey]}, Results: ${state.kenoResults[kenoKey].length}`);
+    log(`✅ [RESET] Keno + mines data for ${siteOrigin} cleared in memory`);
 
     // Use saveToStorage with immediate=true, which has built-in quota cleanup
     try {
-      console.log(`💾 [RESET] Saving to storage with quota cleanup...`);
+      log(`💾 [RESET] Saving to storage with quota cleanup...`);
       await saveToStorage(true);
-      console.log('✅ [RESET] Reset data saved to storage successfully');
+      log('✅ [RESET] Reset data saved to storage successfully');
     } catch (error) {
       console.error('❌ [RESET] Failed to save reset data:', error);
       throw error;
@@ -1731,11 +1732,11 @@ let lastKenoStrategy = {};
     const tabOrigin = siteOrigin.includes('games.winna.com') ? 'https://winna.com' : siteOrigin;
 
     browser.tabs.query({ url: `${tabOrigin}/*` }, (tabs) => {
-      console.log(`📢 [RESET] Notifying ${tabs.length} tabs on ${tabOrigin} to reset overlay (data origin: ${siteOrigin})`);
+      log(`📢 [RESET] Notifying ${tabs.length} tabs on ${tabOrigin} to reset overlay (data origin: ${siteOrigin})`);
       tabs.forEach(tab => {
         browser.tabs.sendMessage(tab.id, { type: 'RESET_OVERLAY_DATA' })
-          .then(() => console.log(`✅ [RESET] Tab ${tab.id} notified`))
-          .catch((err) => console.log(`⚠️ [RESET] Tab ${tab.id} notification failed:`, err.message));
+          .then(() => log(`✅ [RESET] Tab ${tab.id} notified`))
+          .catch((err) => log(`⚠️ [RESET] Tab ${tab.id} notification failed:`, err.message));
       });
     });
   }
@@ -1764,7 +1765,7 @@ let lastKenoStrategy = {};
 
   async function processLegendStats(betData, siteOrigin) {
     if (betData.payoutMultiplier > 30) {
-      console.log(`Vantedge BG: High hit detected! ${betData.payoutMultiplier}x on ${siteOrigin}`);
+      log(`Vantedge BG: High hit detected! ${betData.payoutMultiplier}x on ${siteOrigin}`);
 
       const siteKey = `${siteOrigin}-keno-session`;
       const newHit = {
@@ -1818,7 +1819,7 @@ let lastKenoStrategy = {};
 
       allLegendStats[siteKey] = siteStats;
 
-      console.log(`💎 Legend stats updated for ${siteOrigin}:`, siteStats);
+      log(`💎 Legend stats updated for ${siteOrigin}:`, siteStats);
       await browser.storage.local.set({ legendStats: allLegendStats });
     }
   }
@@ -1831,7 +1832,7 @@ let lastKenoStrategy = {};
         if (tabs[0]) {
           browser.tabs.sendMessage(tabs[0].id, { type: 'TOGGLE_OVERLAY' }, (response) => {
             if (browser.runtime.lastError) {
-              console.log('Could not toggle overlay - not on a supported page or overlay not loaded');
+              log('Could not toggle overlay - not on a supported page or overlay not loaded');
             }
           });
         }

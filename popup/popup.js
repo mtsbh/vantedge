@@ -2,6 +2,9 @@ if (typeof browser === 'undefined') {
   var browser = chrome;
 }
 
+const DEBUG = false;
+function log(...args) { if (DEBUG) console.log(...args); }
+
 const originalConsoleWarn = console.warn;
 console.warn = function (...args) {
   const message = args.join(' ');
@@ -21,7 +24,7 @@ function getStorageOrigin(origin) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  console.log('Popup DOM loaded, initializing...');
+  log('Popup DOM loaded, initializing...');
 
   let lastDataLoadTime = 0;
   let initialLoadDone = false;
@@ -104,11 +107,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     }, 10000);
 
     window.addEventListener('focus', () => {
-      console.log('Popup focused, refreshing data.');
+      log('Popup focused, refreshing data.');
       loadData();
     });
 
-    console.log('âœ… Extension popup initialized successfully');
+    log('âœ… Extension popup initialized successfully');
   }
 
 
@@ -1049,7 +1052,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    console.log(`ðŸŽ¯ Switching to ${mineCount}-mine view`);
+    log(`ðŸŽ¯ Switching to ${mineCount}-mine view`);
 
     currentViewingMineCount = mineCount;
     heatmapUpdateInProgress = true;
@@ -1293,7 +1296,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (elements.combinationDisplay) elements.combinationDisplay.innerHTML = '';
 
     updateEnhancedMinesStats(null);
-    console.log('âœ… All displayed data cleared');
+    log('âœ… All displayed data cleared');
   };
 
   const getDefaultAdvancedStats = () => ({

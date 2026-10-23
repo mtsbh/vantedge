@@ -10,6 +10,9 @@
     // — as opposed to being injected and declining to mount.
     console.log(`Vantedge: overlay script loaded (build ${OVERLAY_BUILD}, path ${location.pathname})`);
 
+    const DEBUG = false;
+    function log(...args) { if (DEBUG) console.log(...args); }
+
     function safe(fn, context = 'General') {
         try {
             return fn();
@@ -4966,7 +4969,7 @@
                         }
                     });
 
-                    console.log('[Vantedge] Roobet: Found container with', roobetContainer?.querySelectorAll('label').length || 0, 'labels');
+                    log('[Vantedge] Roobet: Found container with', roobetContainer?.querySelectorAll('label').length || 0, 'labels');
 
                     if (roobetContainer) {
                         const labels = Array.from(roobetContainer.querySelectorAll('label'));
@@ -4993,7 +4996,7 @@
                             }
                         });
 
-                        console.log('[Vantedge] Roobet: Found', foundButtons.length, 'buttons');
+                        log('[Vantedge] Roobet: Found', foundButtons.length, 'buttons');
 
                         if (foundButtons.length >= 35) {
                             const uniqueMap = new Map();
@@ -5002,7 +5005,7 @@
                                 .sort((a, b) => a.number - b.number)
                                 .map(item => item.element);
 
-                            console.log('[Vantedge] Roobet: Returning', bestMatch.length, 'unique buttons');
+                            log('[Vantedge] Roobet: Returning', bestMatch.length, 'unique buttons');
                             this.lastCacheTime = now;
                             this.cachedButtons = bestMatch;
                             return bestMatch;
@@ -8083,7 +8086,7 @@
         if (window.geminyzerOverlay || !routeGame()) return;
         safe(() => {
             const overlay = new GeminyzerOverlay();
-            console.log(`✅ Vantedge overlay mounted (${overlay.gameMode})`);
+            log(`✅ Vantedge overlay mounted (${overlay.gameMode})`);
             document.addEventListener('keydown', (e) => {
                 if (e.ctrlKey && e.shiftKey && e.key === 'G') {
                     e.preventDefault();
@@ -8122,7 +8125,7 @@
     function checkAlive() {
         if (!routeGame() || !window.geminyzerOverlay) return;
         if (document.getElementById('geminyzer-overlay')) return;
-        console.log('Vantedge: overlay node was removed by the page — remounting');
+        log('Vantedge: overlay node was removed by the page — remounting');
         safe(() => window.geminyzerOverlay.destroy());
         initializeOverlay();
     }
