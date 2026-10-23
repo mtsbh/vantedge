@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Vantedge",
-  "version": "3.27",
+  "version": "3.28",
   "description": "Real-time analytics and insights for online gaming",
   "icons": {
     "16": "images/16.png",

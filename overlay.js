@@ -3,7 +3,7 @@
 
     if (window.geminyzerOverlay) return;
 
-    const OVERLAY_BUILD = '3.26';
+    const OVERLAY_BUILD = '3.28';
     // Logged on every page of a supported site, before anything else can fail.
     // If this line is missing from the console, the script isn't being injected
     // at all (stale extension, or the page isn't in the manifest's match list)
@@ -5085,16 +5085,19 @@
                     parentSelector = null;
                 } else { // Stake (default)
                     containerSelector = '.game-content.stake-original, [data-testid="game-keno"]';
-                    selector = 'button.tile > span.tile-number, button.tile > span, button[data-testid^="tile-"] span';
+                    // Current board: <button class="tile" data-testid="game-tile-38">
+                    // <div class="tile-face"><span class="tile-number">38</span>
+                    // <div class="cover"><span class="tile-number">38</span></div></div>.
+                    // The number is printed twice (face + cover), so the button reads
+                    // "38 38" - match the face span only.
+                    selector = 'button[data-testid^="game-tile-"] .tile-face > span.tile-number, button.tile > span.tile-number, button.tile > span, button[data-testid^="tile-"] span';
                     parentSelector = 'button';
                 }
 
                 let gameContainer = containerSelector ? document.querySelector(containerSelector) : document.body;
                 if (!gameContainer && site === 'stake') {
-                    const testButton = document.querySelector('button[data-testid^="tile-"]');
-                    if (testButton) {
-                        gameContainer = testButton.parentElement || document.body;
-                    }
+                    const testButton = document.querySelector('button[data-testid^="game-tile-"], button[data-testid^="tile-"]');
+                    gameContainer = testButton?.parentElement || document.body;
                 }
                 if (!gameContainer && site === 'acebet') {
                     gameContainer = document.body;
@@ -5138,6 +5141,7 @@
                 if (bestMatch.length < 35) {
                     console.warn(`⚠️ ${site}: Only ${bestMatch.length}/40 buttons found, trying fallback...`);
                     bestMatch = this.manualKenoDetection();
+                    if (bestMatch.length < 35) bestMatch = this.genericKenoDetection(maxN);
                 }
 
                 if (bestMatch.length >= 35) {
@@ -5148,6 +5152,57 @@
                 }
                 return bestMatch;
             }, []);
+        }
+
+        // Markup-agnostic board finder for when a site's classes change.
+        // Starts from text nodes reading exactly 1..maxN, takes the outermost
+        // element still reading just that number as the tile (or the button
+        // around it), then picks the tightest container holding 35+ distinct
+        // numbers. Text nodes keep this cheap on large pages.
+        genericKenoDetection(maxN = 40) {
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            const tiles = [];
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                const text = node.data.trim();
+                if (!/^\d{1,2}$/.test(text)) continue;
+                const num = parseInt(text, 10);
+                if (num < 1 || num > maxN) continue;
+                let el = node.parentElement;
+                if (!el || el.closest('#geminyzer-overlay')) continue;
+                while (el.parentElement && el.parentElement !== document.body &&
+                       (el.parentElement.textContent || '').trim() === text) {
+                    el = el.parentElement;
+                }
+                const btn = el.closest('button, [role="button"]');
+                if (btn && (btn.textContent || '').trim() === text) el = btn;
+                const rect = el.getBoundingClientRect();
+                if (rect.width < 20 || rect.height < 20) continue;
+                tiles.push({ el, num });
+            }
+
+            // Tightest ancestor (up to 4 levels above a tile) holding 35+ numbers.
+            const counts = new Map();
+            tiles.forEach(t => {
+                let a = t.el.parentElement;
+                for (let d = 0; a && d < 4; d++, a = a.parentElement) {
+                    if (!counts.has(a)) counts.set(a, { depth: d, nums: new Set() });
+                    const c = counts.get(a);
+                    c.nums.add(t.num);
+                    c.depth = Math.min(c.depth, d);
+                }
+            });
+            let best = null;
+            counts.forEach((c, a) => {
+                if (c.nums.size < 35) return;
+                if (!best || c.depth < best.depth) best = { a, depth: c.depth };
+            });
+            if (!best) return [];
+
+            const byNum = new Map();
+            tiles.forEach(t => {
+                if (!byNum.has(t.num) && best.a.contains(t.el)) byNum.set(t.num, t.el);
+            });
+            return Array.from(byNum.entries()).sort((x, y) => x[0] - y[0]).map(e => e[1]);
         }
 
         manualKenoDetection() {
@@ -5703,6 +5758,9 @@
                 const span = element.querySelector('span:not([type="checkbox"])');
                 return parseInt((span?.textContent || '').trim(), 10);
             }
+            const testId = element.getAttribute?.('data-testid') || '';
+            const m = testId.match(/^game-tile-(\d+)$/);
+            if (m) return parseInt(m[1], 10);
             return parseInt((element.textContent || element.innerText || '').trim(), 10);
         }
 
@@ -8074,10 +8132,17 @@
         setInterval(() => { checkRoute(); checkAlive(); }, 1000);
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => setTimeout(startRouteWatch, 800));
+    // Mount only after the page has finished loading. Stake is SvelteKit
+    // (Svelte 5): it hydrates the server-rendered board after its modules load,
+    // and any node we add to <head>/<body> before then can derail hydration
+    // ("Failed to hydrate: TypeError: Illegal invocation"). A failed hydration
+    // leaves the board as dead server HTML - the tiles render but nothing on
+    // them is clickable, by hand or by us.
+    const HYDRATION_GRACE_MS = 1500;
+    if (document.readyState === 'complete') {
+        setTimeout(startRouteWatch, HYDRATION_GRACE_MS);
     } else {
-        setTimeout(startRouteWatch, 800);
+        window.addEventListener('load', () => setTimeout(startRouteWatch, HYDRATION_GRACE_MS), { once: true });
     }
 })();
 
