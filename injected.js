@@ -165,6 +165,15 @@
 
         return xhr;
     }
+    // Keep the native prototype and state constants on the shim. Without them
+    // `xhr instanceof XMLHttpRequest`, `XMLHttpRequest.DONE` and anything that
+    // reaches for XMLHttpRequest.prototype see a bare function instead.
+    try {
+        interceptXHR.prototype = originalXHR.prototype;
+        ['UNSENT', 'OPENED', 'HEADERS_RECEIVED', 'LOADING', 'DONE'].forEach(k => {
+            interceptXHR[k] = originalXHR[k];
+        });
+    } catch (e) {}
     window.XMLHttpRequest = cloak(interceptXHR, 'function XMLHttpRequest() { [native code] }');
 
     const originalFetch = window.fetch;
