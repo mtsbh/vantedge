@@ -126,7 +126,7 @@
         overdue: [9, 5], progressive: [8, 5], streak: [8, 5], entropy: [9, 4],
         positional: [9, 8], digitbias: [8], successor: [9],
         montecarlo: [9], variance: [9, 5], antipattern: [8, 6], random: [9],
-        repeat: [6], portfolio: [8], wheeling: [6], momentum: [8, 5],
+        repeat: [6], hot10: [9, 6], portfolio: [8], wheeling: [6], momentum: [8, 5],
         adaptive: [9, 6], edge: [8, 5], regime: [8, 4], bayesian: [9, 5],
         drought: [8], cycle: [9], hotzone: [8], anticluster: [10, 6],
         balanced: [8], transition: [8, 6], volatility: [7], poisson: [9], runs: [9]
@@ -353,6 +353,7 @@
 
             this.strategyExplanations = {
                 // Row 1: Core Fundamentals
+                hot10: { name: "Hot 10", method: "Short-Window Frequency", description: "Hot, counted over the last 10 draws only instead of the whole session. Ties go to the number drawn most recently, then to the all-time count.", usage: "Best for: Following what the board is doing right now." },
                 hot: { name: "Hot", method: "Frequency Analysis", description: "Selects the most frequently drawn numbers from all recorded games.", usage: "Best for: Following long-term trends. Top performer!" },
                 cold: { name: "Cold", method: "Inverse Frequency", description: "Chooses the least frequently drawn numbers, based on mean-reversion theory.", usage: "Best for: Contrarian betting." },
                 smart: { name: "Smart", method: "Dynamic Percentile Zoning", description: "Uses percentile-based zones (top 25%, middle 50%, bottom 25%) for balanced coverage with randomized sampling.", usage: "Best for: Comprehensive board coverage with reduced variance." },
@@ -2706,6 +2707,7 @@
                 balanced: '<path d="M12 3v18"/><path d="M5 7h14"/><path d="M5 7 2 13a3 3 0 0 0 6 0z"/><path d="M19 7l-3 6a3 3 0 0 0 6 0z"/><path d="M8 21h8"/>',
                 momentum: '<path d="M9.59 4.59A2 2 0 1 1 11 8H2"/><path d="M17 12a2 2 0 1 0 2 2H2"/><path d="M14.83 19.41A2 2 0 1 0 16 23H2"/>',
                 poisson: '<path d="M6.5 12c.94-3.46 4.94-6 8.5-6 3.56 0 6.06 2.54 7 6-.94 3.47-3.44 6-7 6s-7.56-2.53-8.5-6z"/><circle cx="16" cy="10" r="1"/><path d="M2 12s2 2 4 2"/>',
+                hot10: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/><circle cx="19" cy="5" r="3"/>',
                 repeat: '<polyline points="8 7 3 12 8 17"/><polyline points="16 7 21 12 16 17"/><line x1="3" y1="12" x2="21" y2="12"/>',
                 successor: '<circle cx="5" cy="12" r="2.4"/><circle cx="19" cy="12" r="2.4"/><line x1="8" y1="12" x2="15" y2="12"/><polyline points="13 9 16 12 13 15"/>',
                 cycle: '<path d="M3 12a9 9 0 1 1 3 6.7"/><polyline points="3 13 3 19 9 19"/><circle cx="12" cy="12" r="2"/>',
@@ -3083,6 +3085,7 @@
         // Core is full; row 4 is here because it measured no signal at all.
         SIDE_DRAWER_DEFAULTS = [
             // Real own signal, 100% autonomous
+            { id: 'hot10', name: 'Hot 10' },
             { id: 'repeat', name: 'Repeat' },
             { id: 'portfolio', name: 'Portfolio' },
             { id: 'wheeling', name: 'Wheeling' },
@@ -3209,6 +3212,7 @@
         selectMethodMap() {
             const map = {
                 'hot': 'selectHotNumbers',
+                'hot10': 'selectHot10Numbers',
                 'cold': 'selectColdNumbers',
                 'smart': 'selectSmartNumbers',
                 'random': 'selectRandomNumbers',
@@ -4945,7 +4949,8 @@
 
         findKenoNumbers() {
             const now = Date.now();
-            if (this.cachedButtons && (now - this.lastCacheTime) < 3000) {
+            if (this.cachedButtons && (now - this.lastCacheTime) < 3000 &&
+                this.cachedButtons.every(b => b.isConnected)) {
                 return this.cachedButtons;
             }
 
@@ -5043,8 +5048,12 @@
                     selector = 'span[class*="Keno_number"], span[class*="keno_number" i], span[class*="number"], button span';
                     parentSelector = 'button[class*="Keno_grid-item"], button[class*="keno_grid-item" i], button[class*="grid-item" i], button';
                 } else if (site === 'shuffle') {
-                    containerSelector = 'div[class*="KenoGrid_numberContainer"]';
-                    selector = 'button[data-testid^="keno-button-"]';
+                    // CSS-module class names (KenoGrid_numberContainer__xxxx) and
+                    // test ids change between Shuffle deploys. Try the known ones,
+                    // else scan every button and keep the ones labelled 1-40.
+                    containerSelector = ['div[class*="KenoGrid_numberContainer"]', 'div[class*="KenoGrid"]', 'div[class*="kenoGrid" i]']
+                        .find(sel => document.querySelector(sel)) || null;
+                    selector = 'button[data-testid^="keno-button-"], button';
                     parentSelector = null;
                 } else if (site === 'betfury') {
                     const possibleContainers = [
@@ -5102,11 +5111,8 @@
                     const testButton = document.querySelector('button[data-testid^="game-tile-"], button[data-testid^="tile-"]');
                     gameContainer = testButton?.parentElement || document.body;
                 }
-                if (!gameContainer && site === 'acebet') {
-                    gameContainer = document.body;
-                }
                 if (!gameContainer) {
-                    return [];
+                    gameContainer = document.body;
                 }
 
                 bestMatch = [];
@@ -5734,8 +5740,12 @@
             }
 
             if (site === 'shuffle') {
-                const img = element.querySelector('img.KenoGrid_buttonImg__g1cTo');
-                return img && img.style.transform === 'scale(1)';
+                // Selected tiles scale their background image to 1; the class
+                // suffix is a build hash, so match on the prefix.
+                const img = element.querySelector('img[class*="KenoGrid_buttonImg"], img[class*="buttonImg"]');
+                if (img) return img.style.transform === 'scale(1)';
+                if (element.getAttribute('aria-pressed') === 'true' || element.getAttribute('data-selected') === 'true') return true;
+                return /selected|active/i.test(element.className || '');
             }
 
             if (site === 'betfury') {
@@ -5946,6 +5956,34 @@
         selectHotNumbers() {
             const numbers = this.getHotNumbers();
             this.animateSequentialSelection(numbers);
+        }
+
+        // --- Strategy: Hot 10 (short window) ---
+        // Same idea as Hot, counted over the last 10 draws only. With 10 games a
+        // number averages 2.5 hits, so ties are common: break them by the more
+        // recent hit, then by all-time count.
+        getHot10Numbers(count = 9, window = 10) {
+            const N = this.numberCount;
+            const draws = this.getRecentDraws(window);
+            if (!draws.length) return this.getHotNumbers(count);
+            const hits = new Array(N + 1).fill(0);
+            const lastSeen = new Array(N + 1).fill(Infinity);
+            draws.forEach((d, age) => {
+                new Set(d).forEach(n => {
+                    if (n < 1 || n > N) return;
+                    hits[n]++;
+                    if (age < lastSeen[n]) lastSeen[n] = age;
+                });
+            });
+            const all = this.data.kenoStats.hotNumbers || [];
+            return Array.from({ length: N }, (_, i) => i + 1)
+                .sort((a, b) => (hits[b] - hits[a]) ||
+                    (lastSeen[a] - lastSeen[b]) ||
+                    ((all[b - 1] || 0) - (all[a - 1] || 0)))
+                .slice(0, count);
+        }
+        selectHot10Numbers() {
+            this.animateSequentialSelection(this.getHot10Numbers());
         }
 
         // --- Strategy: Cold ---
@@ -7405,6 +7443,7 @@
                 ema: (c) => this.getEMANumbers(c),
                 positional: (c) => this.getPositionalNumbers(c),
                 hot: (c) => this.getHotNumbers(c),
+                hot10: (c) => this.getHot10Numbers(c),
                 repeat: (c) => this.getRepeatChaserNumbers(c),
                 successor: (c) => this.getSuccessorNumbers(c),
                 cold: (c) => this.getColdNumbers(c),
